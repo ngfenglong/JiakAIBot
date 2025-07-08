@@ -109,3 +109,6 @@ Temporary Items
 # Environment variables
 .env 
 access_requests.txt
+
+data/
+logs/
