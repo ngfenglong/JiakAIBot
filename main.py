@@ -12,8 +12,14 @@ from src.services.firebase_service import FirebaseService
 from src.models.meal import Meal, FoodItem, NutritionData
 from src.utils.formatting import format_trend_display, format_meal_list_display
 from src.utils.validation import validate_nutrition_data
+from src.utils.middleware import require_access, require_access_callback, handle_access_request, check_message_access
 
 load_dotenv()
+
+# Debug: Print working directory and environment variables
+print(f"Working directory: {os.getcwd()}")
+print(f"AUTHORIZED_TELEGRAM_IDS from env: '{os.getenv('AUTHORIZED_TELEGRAM_IDS', 'NOT_SET')}'")
+print(f"TELEGRAM_BOT_TOKEN exists: {bool(os.getenv('TELEGRAM_BOT_TOKEN'))}")
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -27,6 +33,7 @@ class JiakAI:
         self.nutritionix_service = NutritionixService()
         self.firebase_service = FirebaseService()
         
+    @require_access
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send a message when the command /start is issued."""
         if not update.effective_user or not update.message:
@@ -50,6 +57,7 @@ class JiakAI:
         
         await update.message.reply_text(welcome_message)
     
+    @require_access
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send a message when the command /help is issued."""
         if not update.message:
@@ -66,9 +74,63 @@ class JiakAI:
         )
         await update.message.reply_text(help_text)
     
+    async def request_access_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /request_access command."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user = update.effective_user
+        user_id = str(user.id)
+        
+        # Check if user is already authorized
+        from src.utils.access_control import check_user_access, log_access_request
+        if check_user_access(user_id):
+            await update.message.reply_text(
+                "✅ You already have access to JiakAI!\n"
+                "You can use all bot commands now. Try /start to begin."
+            )
+            return
+        
+        # Log the access request
+        success = log_access_request(
+            user_id, 
+            user.username, 
+            user.first_name, 
+            user.last_name
+        )
+        
+        if success:
+            message = (
+                "✅ **Access Request Submitted**\n\n"
+                "Your request has been logged and will be reviewed by the administrators.\n\n"
+                "**What happens next?**\n"
+                "• Your request is now in the review queue\n"
+                "• You'll be notified if your access is approved\n"
+                "• Please be patient as reviews may take some time\n\n"
+                "**Information Collected:**\n"
+                f"• Telegram ID: `{user_id}`\n"
+                f"• Username: @{user.username if user.username else 'N/A'}\n"
+                f"• Name: {user.first_name or ''} {user.last_name or ''}".strip()
+            )
+        else:
+            message = (
+                "ℹ️ **Request Already Exists**\n\n"
+                "You have already submitted an access request.\n"
+                "Please wait for administrator review.\n\n"
+                "If you believe this is an error, please contact the administrator directly."
+            )
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle photo messages."""
         if not update.effective_user or not update.message or not update.message.photo:
+            return
+        
+        # Check access before processing
+        if not check_message_access(update):
+            from src.utils.middleware import send_access_denied_message
+            await send_access_denied_message(update, context, update.effective_user)
             return
         
         user_id = str(update.effective_user.id)
@@ -139,6 +201,12 @@ class JiakAI:
         if not update.effective_user or not update.message or not update.message.text:
             return
         
+        # Check access before processing
+        if not check_message_access(update):
+            from src.utils.middleware import send_access_denied_message
+            await send_access_denied_message(update, context, update.effective_user)
+            return
+        
         user_id = str(update.effective_user.id)
         text = update.message.text
         
@@ -196,6 +264,7 @@ class JiakAI:
             logger.error(f"Error processing text: {e}")
             await update.message.reply_text("❌ Sorry, I had trouble analyzing your meal description. Please try again.")
     
+    @require_access
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get daily nutrition summary."""
         if not update.effective_user or not update.message:
@@ -226,6 +295,7 @@ class JiakAI:
             logger.error(f"Error getting summary: {e}")
             await update.message.reply_text("❌ Sorry, I had trouble getting your summary. Please try again.")
     
+    @require_access
     async def history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get meal history with date selection."""
         if not update.effective_user or not update.message:
@@ -266,6 +336,16 @@ class JiakAI:
         await query.answer()
         
         data = query.data
+        
+        # Handle access request before checking authorization for other callbacks
+        if data == 'request_access':
+            await handle_access_request(update, context)
+            return
+        
+        # Check access for all other callbacks
+        if not check_message_access(update):
+            await query.answer("❌ Access denied. Please request access first.", show_alert=True)
+            return
         
         if data.startswith('confirm_'):
             await self._handle_confirm_meal(query, context, data)
@@ -1032,6 +1112,7 @@ async def setup_bot_menu(application):
         BotCommand("summary", "📊 Today's nutrition summary"),
         BotCommand("history", "📝 View meal history"),
         BotCommand("help", "❓ Get help and instructions"),
+        BotCommand("request_access", "🔑 Request access to use the bot"),
     ]
     
     await application.bot.set_my_commands(commands)
@@ -1056,6 +1137,7 @@ def main():
     application.add_handler(CommandHandler("help", jiak_ai.help_command))
     application.add_handler(CommandHandler("summary", jiak_ai.summary_command))
     application.add_handler(CommandHandler("history", jiak_ai.history_command))
+    application.add_handler(CommandHandler("request_access", jiak_ai.request_access_command))
     application.add_handler(CallbackQueryHandler(jiak_ai.handle_callback))
     application.add_handler(MessageHandler(filters.PHOTO, jiak_ai.handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, jiak_ai.handle_text))

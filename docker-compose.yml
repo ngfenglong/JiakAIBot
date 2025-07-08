@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  jiakai:
+    build: .
+    container_name: jiakai-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./access_requests.txt:/app/access_requests.txt
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Singapore
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # If you need to persist Firebase credentials
+    # volumes:
+    #   - ./path/to/firebase-credentials.json:/app/firebase-credentials.json:ro
