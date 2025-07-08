@@ -523,3 +523,156 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"Error getting trend data for user {user_id}: {e}")
             return []
+    
+    async def save_access_request(self, user_id: str, username: str = None, first_name: str = None, last_name: str = None) -> bool:
+        """
+        Save an access request to Firebase.
+        
+        Args:
+            user_id: Telegram user ID
+            username: Telegram username (optional)
+            first_name: User's first name (optional)
+            last_name: User's last name (optional)
+            
+        Returns:
+            True if request was saved successfully, False otherwise
+        """
+        try:
+            # Check if user already has an access request
+            existing_request = await self.get_access_request(user_id)
+            if existing_request:
+                logger.info(f"Access request already exists for user {user_id}")
+                return False
+            
+            # Create display name
+            display_name = self._format_display_name(username, first_name, last_name)
+            
+            # Save access request
+            request_data = {
+                'user_id': user_id,
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'display_name': display_name,
+                'requested_at': datetime.now(),
+                'status': 'pending'
+            }
+            
+            access_requests_ref = self.db.collection('access_requests').document(user_id)
+            access_requests_ref.set(request_data)
+            
+            logger.info(f"Access request saved for user {user_id} ({display_name})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving access request for user {user_id}: {e}")
+            return False
+    
+    async def get_access_request(self, user_id: str) -> Optional[Dict]:
+        """
+        Get an access request by user ID.
+        
+        Args:
+            user_id: Telegram user ID
+            
+        Returns:
+            Access request dictionary or None if not found
+        """
+        try:
+            request_ref = self.db.collection('access_requests').document(user_id)
+            request_doc = request_ref.get()
+            
+            if request_doc.exists:
+                return request_doc.to_dict()
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting access request for user {user_id}: {e}")
+            return None
+    
+    async def get_all_access_requests(self, status: str = None) -> List[Dict]:
+        """
+        Get all access requests.
+        
+        Args:
+            status: Filter by status ('pending', 'approved', 'denied') or None for all
+            
+        Returns:
+            List of access request dictionaries
+        """
+        try:
+            requests_ref = self.db.collection('access_requests')
+            
+            if status:
+                query = requests_ref.where(filter=FieldFilter('status', '==', status))
+            else:
+                query = requests_ref
+            
+            query = query.order_by('requested_at', direction=firestore.Query.DESCENDING)
+            
+            requests = []
+            docs = query.stream()
+            
+            for doc in docs:
+                request_data = doc.to_dict()
+                request_data['id'] = doc.id
+                requests.append(request_data)
+            
+            logger.info(f"Retrieved {len(requests)} access requests (status: {status or 'all'})")
+            return requests
+            
+        except Exception as e:
+            logger.error(f"Error getting access requests: {e}")
+            return []
+    
+    async def update_access_request_status(self, user_id: str, status: str) -> bool:
+        """
+        Update the status of an access request.
+        
+        Args:
+            user_id: Telegram user ID
+            status: New status ('pending', 'approved', 'denied')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            request_ref = self.db.collection('access_requests').document(user_id)
+            request_ref.update({
+                'status': status,
+                'updated_at': datetime.now()
+            })
+            
+            logger.info(f"Updated access request status for user {user_id} to {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating access request status for user {user_id}: {e}")
+            return False
+    
+    def _format_display_name(self, username: str = None, first_name: str = None, last_name: str = None) -> str:
+        """
+        Format a display name from available user information.
+        
+        Args:
+            username: Telegram username (optional)
+            first_name: User's first name (optional)
+            last_name: User's last name (optional)
+            
+        Returns:
+            Formatted display name
+        """
+        parts = []
+        
+        if first_name:
+            parts.append(first_name)
+        if last_name:
+            parts.append(last_name)
+        
+        name = " ".join(parts) if parts else "Unknown"
+        
+        if username:
+            name += f" (@{username})"
+        
+        return name

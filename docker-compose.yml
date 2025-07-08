@@ -10,7 +10,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ./access_requests.txt:/app/access_requests.txt
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Singapore

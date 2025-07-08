@@ -126,7 +126,7 @@ async def handle_access_request(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         # Log the access request
-        success = log_access_request(user_id, username, first_name, last_name)
+        success = await log_access_request(user_id, username, first_name, last_name)
         
         if success:
             # Request logged successfully

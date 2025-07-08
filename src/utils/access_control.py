@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 class AccessControl:
     """Manages user access permissions for the JiakAI bot."""
     
-    def __init__(self):
+    def __init__(self, firebase_service=None):
         self.authorized_users: Set[str] = set()
-        self.access_requests_file = "access_requests.txt"
+        self.firebase_service = firebase_service
         self._load_authorized_users()
     
     def _load_authorized_users(self):
@@ -55,7 +55,7 @@ class AccessControl:
         self._load_authorized_users()
         return user_id in self.authorized_users
     
-    def request_access(self, user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
+    async def request_access(self, user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
         """
         Log an access request from a user.
         
@@ -75,36 +75,39 @@ class AccessControl:
                 return False
             
             # Check if user has already requested access
-            if self._has_existing_request(user_id):
+            if await self._has_existing_request(user_id):
                 logger.info(f"User {user_id} has already requested access")
                 return False
             
-            # Log the access request
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            display_name = self._format_display_name(username, first_name, last_name)
-            
-            request_line = f"{timestamp} | ID: {user_id} | Name: {display_name}\n"
-            
-            # Append to access requests file
-            with open(self.access_requests_file, 'a', encoding='utf-8') as f:
-                f.write(request_line)
-            
-            logger.info(f"Access request logged for user {user_id} ({display_name})")
-            return True
+            # Save access request to Firebase
+            if self.firebase_service:
+                success = await self.firebase_service.save_access_request(
+                    user_id, username, first_name, last_name
+                )
+                if success:
+                    display_name = self._format_display_name(username, first_name, last_name)
+                    logger.info(f"Access request saved to Firebase for user {user_id} ({display_name})")
+                    return True
+                else:
+                    logger.error(f"Failed to save access request to Firebase for user {user_id}")
+                    return False
+            else:
+                logger.error("Firebase service not available for access request logging")
+                return False
             
         except Exception as e:
             logger.error(f"Error logging access request for user {user_id}: {e}")
             return False
     
-    def _has_existing_request(self, user_id: str) -> bool:
+    async def _has_existing_request(self, user_id: str) -> bool:
         """Check if user has already made an access request."""
         try:
-            if not os.path.exists(self.access_requests_file):
+            if self.firebase_service:
+                existing_request = await self.firebase_service.get_access_request(user_id)
+                return existing_request is not None
+            else:
+                logger.error("Firebase service not available for checking existing requests")
                 return False
-            
-            with open(self.access_requests_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                return f"ID: {user_id}" in content
                 
         except Exception as e:
             logger.error(f"Error checking existing requests: {e}")
@@ -126,7 +129,7 @@ class AccessControl:
         
         return name
     
-    def get_authorization_status(self, user_id: str) -> Dict[str, any]:
+    async def get_authorization_status(self, user_id: str) -> Dict[str, any]:
         """
         Get detailed authorization status for a user.
         
@@ -137,7 +140,7 @@ class AccessControl:
             Dictionary with authorization details
         """
         is_auth = self.is_authorized(user_id)
-        has_requested = self._has_existing_request(user_id) if not is_auth else False
+        has_requested = await self._has_existing_request(user_id) if not is_auth else False
         
         return {
             'is_authorized': is_auth,
@@ -145,22 +148,22 @@ class AccessControl:
             'total_authorized_users': len(self.authorized_users)
         }
     
-    def get_access_requests_count(self) -> int:
+    async def get_access_requests_count(self) -> int:
         """Get the total number of access requests."""
         try:
-            if not os.path.exists(self.access_requests_file):
+            if self.firebase_service:
+                requests = await self.firebase_service.get_all_access_requests()
+                return len(requests)
+            else:
+                logger.error("Firebase service not available for counting access requests")
                 return 0
-            
-            with open(self.access_requests_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                return len([line for line in lines if line.strip()])
                 
         except Exception as e:
             logger.error(f"Error counting access requests: {e}")
             return 0
 
-# Global instance
-access_control = AccessControl()
+# Global instance - will be initialized with Firebase service in main.py
+access_control = None
 
 def check_user_access(user_id: str) -> bool:
     """
@@ -172,9 +175,13 @@ def check_user_access(user_id: str) -> bool:
     Returns:
         True if user is authorized
     """
-    return access_control.is_authorized(user_id)
+    if access_control:
+        return access_control.is_authorized(user_id)
+    else:
+        logger.error("Access control not initialized")
+        return False
 
-def log_access_request(user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
+async def log_access_request(user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
     """
     Convenience function to log an access request.
     
@@ -187,7 +194,11 @@ def log_access_request(user_id: str, username: Optional[str] = None, first_name:
     Returns:
         True if request was logged successfully
     """
-    return access_control.request_access(user_id, username, first_name, last_name)
+    if access_control:
+        return await access_control.request_access(user_id, username, first_name, last_name)
+    else:
+        logger.error("Access control not initialized")
+        return False
 
 def reload_authorized_users() -> int:
     """
@@ -196,4 +207,8 @@ def reload_authorized_users() -> int:
     Returns:
         Number of authorized users loaded
     """
-    return access_control.reload_authorized_users()
+    if access_control:
+        return access_control.reload_authorized_users()
+    else:
+        logger.error("Access control not initialized")
+        return 0

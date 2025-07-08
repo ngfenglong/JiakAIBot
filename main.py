@@ -13,6 +13,7 @@ from src.models.meal import Meal, FoodItem, NutritionData
 from src.utils.formatting import format_trend_display, format_meal_list_display
 from src.utils.validation import validate_nutrition_data
 from src.utils.middleware import require_access, require_access_callback, handle_access_request, check_message_access
+import src.utils.access_control as access_control_module
 
 load_dotenv()
 
@@ -32,6 +33,9 @@ class JiakAI:
         self.openai_service = OpenAIService()
         self.nutritionix_service = NutritionixService()
         self.firebase_service = FirebaseService()
+        
+        # Initialize global access control with firebase service
+        access_control_module.access_control = access_control_module.AccessControl(self.firebase_service)
         
     @require_access
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
