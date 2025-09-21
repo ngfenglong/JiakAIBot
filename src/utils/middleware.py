@@ -2,7 +2,7 @@ import functools
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from .access_control import check_user_access, log_access_request
+from .access_control import check_user_access_async, log_access_request
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def require_access(func):
         user_id = str(user.id)
         
         # Check if user has access
-        if check_user_access(user_id):
+        if await check_user_access_async(user_id):
             # User is authorized, proceed with the command
             return await func(self, update, context, *args, **kwargs)
         
@@ -44,7 +44,7 @@ def require_access_callback(func):
         user_id = str(user.id)
         
         # Check if user has access
-        if check_user_access(user_id):
+        if await check_user_access_async(user_id):
             # User is authorized, proceed with the callback
             return await func(self, query, context, *args, **kwargs)
         
@@ -155,7 +155,7 @@ async def handle_access_request(update: Update, context: ContextTypes.DEFAULT_TY
         last_name = user.last_name
         
         # Check if user is already authorized
-        if check_user_access(user_id):
+        if await check_user_access_async(user_id):
             await query.edit_message_text(
                 "✅ You already have access to JiakAI!\n"
                 "You can use all bot commands now. Try /start to begin."
@@ -199,18 +199,18 @@ async def handle_access_request(update: Update, context: ContextTypes.DEFAULT_TY
                 "❌ Error processing your request. Please try again later."
             )
 
-def check_message_access(update: Update) -> bool:
+async def check_message_access(update: Update) -> bool:
     """
     Quick access check for message handlers.
-    
+
     Args:
         update: Telegram update object
-        
+
     Returns:
         True if user has access, False otherwise
     """
     if not update.effective_user:
         return False
-    
+
     user_id = str(update.effective_user.id)
-    return check_user_access(user_id)
+    return await check_user_access_async(user_id)

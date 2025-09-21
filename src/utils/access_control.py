@@ -76,7 +76,8 @@ class AccessControl:
 
     async def is_authorized(self, user_id: str) -> bool:
         """
-        Check if a user is authorized to use the bot with cache management.
+        Check if a user is authorized by checking Firebase directly.
+        Simple logic: status == 'approved' means authorized.
 
         Args:
             user_id: Telegram user ID as string
@@ -84,26 +85,49 @@ class AccessControl:
         Returns:
             True if user is authorized, False otherwise
         """
-        # Check if cache needs refresh (only for Firebase)
-        if (self.firebase_service and self.last_cache_update and
-            (datetime.now() - self.last_cache_update).seconds > self.cache_ttl):
-            logger.info("Cache expired, refreshing authorized users from Firebase")
-            await self._load_from_firebase()
-        elif not self.firebase_service:
-            # For environment variable method, always reload to get fresh values
-            self._load_from_env()
+        try:
+            if not self.firebase_service:
+                # Fallback to environment variable
+                self._load_from_env()
+                result = user_id in self.authorized_users
+                logger.info(f"Access check (env fallback) for user {user_id}: {result}")
+                return result
 
-        return user_id in self.authorized_users
+            # Check Firebase directly - no cache, always fresh
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            doc = access_request_ref.get()
 
-    # Synchronous version for backwards compatibility
+            if doc.exists:
+                data = doc.to_dict()
+                status = data.get('status', '')
+                is_approved = status == 'approved'
+                logger.info(f"Access check for user {user_id}: {is_approved} (status: {status})")
+                return is_approved
+            else:
+                logger.info(f"Access check for user {user_id}: False (no request found)")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking authorization for user {user_id}: {e}")
+            return False
+
+    # Synchronous version - simplified
     def is_authorized_sync(self, user_id: str) -> bool:
         """
-        Synchronous version of is_authorized for backwards compatibility.
-        Only uses environment variables (no Firebase cache refresh).
+        Synchronous version - only uses environment variables.
+        For Firebase checks, use the async version.
         """
         if not self.firebase_service:
             self._load_from_env()
-        return user_id in self.authorized_users
+            result = user_id in self.authorized_users
+            logger.info(f"Access check (sync/env) for user {user_id}: {result}")
+            return result
+        else:
+            logger.warning(f"Sync access check called with Firebase service - use async version instead")
+            # Use cached data if available, but don't refresh
+            result = user_id in self.authorized_users
+            logger.info(f"Access check (sync/cached) for user {user_id}: {result} (cached: {len(self.authorized_users)} users)")
+            return result
     
     async def request_access(self, user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
         """
@@ -124,10 +148,15 @@ class AccessControl:
                 logger.info(f"User {user_id} is already authorized, ignoring access request")
                 return False
             
-            # Check if user has already requested access
+            # Check if user has already requested access (but allow denied users to re-request)
             if await self._has_existing_request(user_id):
-                logger.info(f"User {user_id} has already requested access")
-                return False
+                # Check if the existing request is denied - allow those to re-request
+                existing_request = await self.firebase_service.get_access_request(user_id)
+                if existing_request and existing_request.get('status') == 'denied':
+                    logger.info(f"User {user_id} was previously denied, allowing re-request")
+                else:
+                    logger.info(f"User {user_id} has already requested access")
+                    return False
             
             # Save access request to Firebase
             if self.firebase_service:
@@ -217,13 +246,8 @@ access_control = None
 
 def check_user_access(user_id: str) -> bool:
     """
-    Convenience function to check if user has access (synchronous version).
-
-    Args:
-        user_id: Telegram user ID as string
-
-    Returns:
-        True if user is authorized
+    DEPRECATED: Use check_user_access_async() for proper Firebase checking.
+    This synchronous version only works with environment variables.
     """
     if access_control:
         return access_control.is_authorized_sync(user_id)
@@ -233,7 +257,8 @@ def check_user_access(user_id: str) -> bool:
 
 async def check_user_access_async(user_id: str) -> bool:
     """
-    Convenience function to check if user has access (async version with Firebase support).
+    Check if user has access by checking Firebase directly.
+    This is the recommended method for access checking.
 
     Args:
         user_id: Telegram user ID as string

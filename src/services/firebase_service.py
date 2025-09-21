@@ -544,9 +544,23 @@ class FirebaseService:
             if access_requests_doc.exists:
                 request_data = access_requests_doc.to_dict()
                 current_status = request_data.get('status')
+                logger.info(f"Found existing request for user {user_id} with status: {current_status}")
                 if current_status in ['pending', 'approved']:
                     logger.info(f"User {user_id} already has access request with status: {current_status}")
                     return False
+                elif current_status == 'denied':
+                    # User was denied before, convert back to pending for admin review
+                    logger.info(f"User {user_id} was previously denied, converting back to pending")
+                    request_status = 'pending'
+                    extra_fields = {'re_requested_at': datetime.now()}
+                else:
+                    # New request or revoked user
+                    request_status = 'pending'
+                    extra_fields = {}
+            else:
+                # New user
+                request_status = 'pending'
+                extra_fields = {}
 
             # Create display name
             display_name = self._format_display_name(username, first_name, last_name)
@@ -558,13 +572,16 @@ class FirebaseService:
                 'first_name': first_name,
                 'last_name': last_name,
                 'display_name': display_name,
-                'status': 'pending',
+                'status': request_status,
                 'requested_at': datetime.now(),
+                **extra_fields
             }
 
             access_requests_ref.set(request_data, merge=True)
 
-            logger.info(f"Access request saved for user {user_id} ({display_name})")
+            logger.info(f"Access request saved for user {user_id} ({display_name}) with status: {request_status}")
+            if extra_fields:
+                logger.info(f"Extra fields added: {extra_fields}")
             return True
 
         except Exception as e:

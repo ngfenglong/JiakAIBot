@@ -159,8 +159,6 @@ class JiakAI:
                     f"✅ User {target_user_id} has been added to authorized users.\n"
                     f"They can now use the bot."
                 )
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
             else:
                 await update.message.reply_text(f"❌ Failed to add user {target_user_id}. Please try again.")
 
@@ -201,8 +199,6 @@ class JiakAI:
                     f"✅ User {target_user_id} has been removed from authorized users.\n"
                     f"They can no longer use the bot."
                 )
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
             else:
                 await update.message.reply_text(f"❌ Failed to remove user {target_user_id}. Please try again.")
 
@@ -270,12 +266,12 @@ class JiakAI:
             return
 
         try:
-            # Reload access control cache
-            user_count = await access_control_module.access_control.reload_authorized_users()
+            # Note: Cache refresh is no longer needed with direct Firebase checking
+            user_count = 0
 
             await update.message.reply_text(
-                f"🔄 Access control cache refreshed!\n"
-                f"📊 Currently authorized users: {user_count}"
+                f"ℹ️ Access control now uses direct Firebase checking.\n"
+                f"No cache refresh needed - access is always current!"
             )
 
         except Exception as e:
@@ -305,9 +301,7 @@ class JiakAI:
                     f"📊 Migrated {migrated_count} users from environment to Firebase.\n\n"
                     f"🔄 Refreshing access control cache..."
                 )
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
-                await update.message.reply_text("✅ Access control cache refreshed!")
+                await update.message.reply_text("✅ Migration complete - access control updated!")
             else:
                 await update.message.reply_text(
                     "ℹ️ No new users to migrate.\n"
@@ -1026,8 +1020,12 @@ class JiakAI:
             await self._handle_nutrition_adjust(query, context, data, 'fat')
         elif data.startswith('approve_user_'):
             await self._handle_approve_user(query, context, data)
+        elif data.startswith('approve_request_'):
+            await self._handle_approve_request(query, context, data)
         elif data.startswith('deny_user_'):
             await self._handle_deny_user(query, context, data)
+        elif data.startswith('deny_request_'):
+            await self._handle_deny_request(query, context, data)
         elif data.startswith('revoke_user_'):
             await self._handle_revoke_user(query, context, data)
         elif data == 'approve_all_users':
@@ -1063,8 +1061,6 @@ class JiakAI:
             success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
 
             if success:
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
 
                 # Send notification to user
                 try:
@@ -1089,7 +1085,7 @@ class JiakAI:
                     f"User {user_id} has been approved for access.\n"
                     f"They can now use the bot.\n\n"
                     f"📬 User has been notified.\n"
-                    f"🔄 Access control cache refreshed."
+                    f"✅ Access updated in Firebase."
                 )
             else:
                 await query.edit_message_text("❌ Failed to approve user. Please try again.")
@@ -1097,6 +1093,47 @@ class JiakAI:
         except Exception as e:
             logger.error(f"Error approving user: {e}")
             await query.edit_message_text("❌ An error occurred while approving the user.")
+
+    async def _handle_approve_request(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle access request approval."""
+        user_id = data.replace('approve_request_', '')
+
+        try:
+            # Update access request status to approved
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            access_request_ref.update({
+                'status': 'approved',
+                'approved_at': datetime.now()
+            })
+
+
+            # Get user details for notification
+            user_doc = access_request_ref.get()
+            user_data = user_doc.to_dict() if user_doc.exists else {}
+            display_name = user_data.get('display_name', user_id)
+
+            # Send notification to the user
+            try:
+                await self.send_message(
+                    chat_id=int(user_id),
+                    text=(
+                        "🎉 **Access Approved!**\n\n"
+                        "Your access request has been approved! You can now use all JiakAI features.\n\n"
+                        "Try /start to begin using the bot."
+                    ),
+                    parse_mode='Markdown'
+                )
+            except Exception as notification_error:
+                logger.warning(f"Could not send approval notification to user {user_id}: {notification_error}")
+
+            await query.edit_message_text(
+                f"✅ **Access Request Approved**\n\n"
+                f"User {display_name} ({user_id}) has been approved and notified."
+            )
+
+        except Exception as e:
+            logger.error(f"Error approving access request: {e}")
+            await query.edit_message_text("❌ An error occurred while approving the access request.")
 
     async def _handle_deny_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
         """Handle user denial."""
@@ -1119,6 +1156,27 @@ class JiakAI:
             logger.error(f"Error denying user: {e}")
             await query.edit_message_text("❌ An error occurred while denying the user.")
 
+    async def _handle_deny_request(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle access request denial."""
+        user_id = data.replace('deny_request_', '')
+
+        try:
+            # Update access request status to denied
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            access_request_ref.update({
+                'status': 'denied',
+                'denied_at': datetime.now()
+            })
+
+            await query.edit_message_text(
+                f"❌ **Access Request Denied**\n\n"
+                f"Access request from user {user_id} has been denied."
+            )
+
+        except Exception as e:
+            logger.error(f"Error denying access request: {e}")
+            await query.edit_message_text("❌ An error occurred while denying the access request.")
+
     async def _handle_revoke_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
         """Handle user access revocation."""
         user_id = data.replace('revoke_user_', '')
@@ -1129,14 +1187,12 @@ class JiakAI:
             success = await self.firebase_service.revoke_user_access(user_id, admin_user_id)
 
             if success:
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
 
                 await query.edit_message_text(
                     f"🚫 **User Access Revoked**\n\n"
                     f"User {user_id} access has been revoked.\n"
                     f"They can no longer use the bot.\n\n"
-                    f"🔄 Access control cache refreshed."
+                    f"✅ Access updated in Firebase."
                 )
             else:
                 await query.edit_message_text("❌ Failed to revoke user access. Please try again.")
@@ -1155,8 +1211,6 @@ class JiakAI:
             success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
 
             if success:
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
 
                 # Send notification to user
                 try:
@@ -1178,7 +1232,7 @@ class JiakAI:
                     f"User {user_id} has been re-approved!\n"
                     f"They can now use the bot again.\n\n"
                     f"📬 User has been notified.\n"
-                    f"🔄 Access control cache refreshed."
+                    f"✅ Access updated in Firebase."
                 )
             else:
                 await query.edit_message_text("❌ Failed to re-approve user. Please try again.")
@@ -1197,8 +1251,6 @@ class JiakAI:
             success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
 
             if success:
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
 
                 # Send notification to user
                 try:
@@ -1220,7 +1272,7 @@ class JiakAI:
                     f"User {user_id} has been reinstated!\n"
                     f"They can now use the bot again.\n\n"
                     f"📬 User has been notified.\n"
-                    f"🔄 Access control cache refreshed."
+                    f"✅ Access updated in Firebase."
                 )
             else:
                 await query.edit_message_text("❌ Failed to approve reinstatement. Please try again.")
@@ -1241,24 +1293,9 @@ class JiakAI:
                 'denied_at': datetime.now()
             })
 
-            # Send notification to user
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        "❌ **Reinstatement Request Denied**\n\n"
-                        "Your request to restore access has been reviewed and denied.\n\n"
-                        "If you have questions about this decision, please contact the administrator directly."
-                    ),
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Could not notify user {user_id}: {e}")
-
             await query.edit_message_text(
                 f"❌ **Reinstatement Denied**\n\n"
-                f"Reinstatement request for user {user_id} has been denied.\n\n"
-                f"📬 User has been notified."
+                f"Reinstatement request for user {user_id} has been denied."
             )
 
         except Exception as e:
@@ -1469,8 +1506,6 @@ class JiakAI:
             if success:
                 # Update request status
                 await self.firebase_service.update_access_request_status(user_id, 'approved')
-                # Refresh cache
-                await access_control_module.access_control.reload_authorized_users()
 
                 await query.edit_message_text(
                     f"⚡ **Quick Add Successful**\n\n"
@@ -1508,14 +1543,12 @@ class JiakAI:
                     if add_success and status_success:
                         approved_count += 1
 
-            # Refresh cache
-            await access_control_module.access_control.reload_authorized_users()
 
             await query.edit_message_text(
                 f"✅ **Bulk Approval Complete**\n\n"
                 f"Approved {approved_count} out of {len(requests)} requests.\n"
                 f"All approved users can now use the bot.\n\n"
-                f"🔄 Access control cache refreshed."
+                f"✅ Access updated in Firebase."
             )
 
         except Exception as e:
@@ -1572,8 +1605,6 @@ class JiakAI:
                     if add_success and status_success:
                         added_count += 1
 
-            # Refresh cache
-            await access_control_module.access_control.reload_authorized_users()
 
             await query.edit_message_text(
                 f"⚡ **Quick Add All Complete**\n\n"
