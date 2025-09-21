@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -526,27 +525,32 @@ class FirebaseService:
     
     async def save_access_request(self, user_id: str, username: str = None, first_name: str = None, last_name: str = None) -> bool:
         """
-        Save an access request to Firebase.
-        
+        Save an access request to access_requests collection.
+
         Args:
             user_id: Telegram user ID
             username: Telegram username (optional)
             first_name: User's first name (optional)
             last_name: User's last name (optional)
-            
+
         Returns:
             True if request was saved successfully, False otherwise
         """
         try:
-            # Check if user already has an access request
-            existing_request = await self.get_access_request(user_id)
-            if existing_request:
-                logger.info(f"Access request already exists for user {user_id}")
-                return False
-            
+            # Check if user already has a pending or approved request
+            access_requests_ref = self.db.collection('access_requests').document(user_id)
+            access_requests_doc = access_requests_ref.get()
+
+            if access_requests_doc.exists:
+                request_data = access_requests_doc.to_dict()
+                current_status = request_data.get('status')
+                if current_status in ['pending', 'approved']:
+                    logger.info(f"User {user_id} already has access request with status: {current_status}")
+                    return False
+
             # Create display name
             display_name = self._format_display_name(username, first_name, last_name)
-            
+
             # Save access request
             request_data = {
                 'user_id': user_id,
@@ -554,16 +558,15 @@ class FirebaseService:
                 'first_name': first_name,
                 'last_name': last_name,
                 'display_name': display_name,
+                'status': 'pending',
                 'requested_at': datetime.now(),
-                'status': 'pending'
             }
-            
-            access_requests_ref = self.db.collection('access_requests').document(user_id)
-            access_requests_ref.set(request_data)
-            
+
+            access_requests_ref.set(request_data, merge=True)
+
             logger.info(f"Access request saved for user {user_id} ({display_name})")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error saving access request for user {user_id}: {e}")
             return False
@@ -626,7 +629,7 @@ class FirebaseService:
             logger.error(f"Error getting access requests: {e}")
             return []
     
-    async def update_access_request_status(self, user_id: str, status: str) -> bool:
+    async def update_access_requests_status(self, user_id: str, status: str) -> bool:
         """
         Update the status of an access request.
         
@@ -674,5 +677,430 @@ class FirebaseService:
         
         if username:
             name += f" (@{username})"
-        
+
         return name
+
+    async def get_authorized_users(self) -> List[str]:
+        """
+        Get list of authorized user IDs from access_requests collection.
+
+        Returns:
+            List of authorized user IDs
+        """
+        try:
+            access_requests_ref = self.db.collection('access_requests')
+            query = access_requests_ref.where(filter=FieldFilter('status', '==', 'approved'))
+            docs = query.stream()
+
+            user_ids = []
+            for doc in docs:
+                request_data = doc.to_dict()
+                user_id = request_data.get('user_id')
+                if user_id:
+                    user_ids.append(user_id)
+
+            logger.info(f"Retrieved {len(user_ids)} authorized users from Firebase access_requests collection")
+            return user_ids
+
+        except Exception as e:
+            logger.error(f"Error getting authorized users from Firebase: {e}")
+            return []
+
+    async def approve_user_access(self, user_id: str, approved_by: str = None) -> bool:
+        """
+        Approve user access by updating their status in access_requests collection
+        and ensuring user details are stored in users collection.
+
+        Args:
+            user_id: Telegram user ID to approve
+            approved_by: User ID of admin who approved this user
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get the access request details first
+            access_requests_ref = self.db.collection('access_requests').document(user_id)
+            access_requests_doc = access_requests_ref.get()
+
+            if not access_requests_doc.exists:
+                logger.error(f"No access request found for user {user_id}")
+                return False
+
+            request_data = access_requests_doc.to_dict()
+
+            # Update the access request status to approved
+            access_requests_ref.update({
+                'status': 'approved',
+                'approved_at': datetime.now(),
+                'approved_by': approved_by
+            })
+
+            # Store/update user details in users collection for data preservation
+            user_ref = self.db.collection('users').document(user_id)
+            user_data = {
+                'telegram_id': user_id,
+                'username': request_data.get('username'),
+                'first_name': request_data.get('first_name'),
+                'last_name': request_data.get('last_name'),
+                'last_active': datetime.now(),
+                'created_at': datetime.now()
+            }
+
+            # Check if user already exists to preserve created_at
+            existing_user = user_ref.get()
+            if existing_user.exists:
+                existing_data = existing_user.to_dict()
+                user_data['created_at'] = existing_data.get('created_at', datetime.now())
+                user_ref.update(user_data)
+            else:
+                user_ref.set(user_data)
+
+            logger.info(f"Approved access for user {user_id} (approved by {approved_by})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error approving user {user_id}: {e}")
+            return False
+
+    async def revoke_user_access(self, user_id: str, revoked_by: str = None) -> bool:
+        """
+        Revoke user access by updating their status in access_requests collection.
+        User data remains in users collection for data preservation.
+
+        Args:
+            user_id: Telegram user ID to revoke access
+            revoked_by: User ID of admin who revoked this user
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Update the access request status to revoked
+            access_requests_ref = self.db.collection('access_requests').document(user_id)
+            access_requests_doc = access_requests_ref.get()
+
+            if access_requests_doc.exists:
+                access_requests_ref.update({
+                    'status': 'revoked',
+                    'revoked_at': datetime.now(),
+                    'revoked_by': revoked_by
+                })
+
+                logger.info(f"Revoked access for user {user_id} (revoked by {revoked_by})")
+                return True
+            else:
+                logger.warning(f"Access request for user {user_id} not found when trying to revoke access")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error revoking access for user {user_id}: {e}")
+            return False
+
+    async def add_authorized_user(self, user_id: str, added_by: str = None) -> bool:
+        """
+        Add a user by creating an approved access request and user record.
+
+        Args:
+            user_id: Telegram user ID to add
+            added_by: User ID of admin who added this user
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create access request record with approved status
+            access_requests_ref = self.db.collection('access_requests').document(user_id)
+            request_data = {
+                'user_id': user_id,
+                'username': None,  # Will be filled when user interacts
+                'first_name': None,
+                'last_name': None,
+                'display_name': f'User {user_id}',
+                'status': 'approved',
+                'requested_at': datetime.now(),
+                'approved_at': datetime.now(),
+                'approved_by': added_by
+            }
+            access_requests_ref.set(request_data)
+
+            # Create user record in users collection
+            user_ref = self.db.collection('users').document(user_id)
+            user_data = {
+                'telegram_id': user_id,
+                'username': None,
+                'first_name': None,
+                'last_name': None,
+                'created_at': datetime.now(),
+                'last_active': datetime.now()
+            }
+            user_ref.set(user_data)
+
+            logger.info(f"Added authorized user {user_id} (added by {added_by})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error adding authorized user {user_id}: {e}")
+            return False
+
+    async def get_access_requests(self, status: str = 'pending') -> List[Dict]:
+        """
+        Get access requests from access_requests collection.
+
+        Args:
+            status: Filter by status ('pending', 'approved', 'denied', 'revoked') or None for all
+
+        Returns:
+            List of user dictionaries with access request info
+        """
+        try:
+            access_requests_ref = self.db.collection('access_requests')
+
+            if status:
+                query = access_requests_ref.where(filter=FieldFilter('status', '==', status))
+                # Note: Cannot order_by different field when filtering without composite index
+                # Results will be retrieved and sorted in Python instead
+            else:
+                query = access_requests_ref.order_by('requested_at', direction=firestore.Query.DESCENDING)
+
+            requests = []
+            docs = query.stream()
+
+            for doc in docs:
+                request_data = doc.to_dict()
+
+                # Format the request data to match expected structure
+                formatted_data = {
+                    'user_id': request_data.get('user_id'),
+                    'username': request_data.get('username'),
+                    'first_name': request_data.get('first_name'),
+                    'last_name': request_data.get('last_name'),
+                    'display_name': request_data.get('display_name') or self._format_display_name(
+                        request_data.get('username'),
+                        request_data.get('first_name'),
+                        request_data.get('last_name')
+                    ),
+                    'access_status': request_data.get('status', 'pending'),  # Map 'status' to 'access_status'
+                    'requested_at': request_data.get('requested_at'),
+                    'approved_at': request_data.get('approved_at'),
+                    'approved_by': request_data.get('approved_by'),
+                    'revoked_at': request_data.get('revoked_at'),
+                    'revoked_by': request_data.get('revoked_by')
+                }
+
+                requests.append(formatted_data)
+
+            # Sort by requested_at in descending order when filtering by status
+            if status:
+                requests.sort(key=lambda x: x.get('requested_at') or datetime.min, reverse=True)
+
+            logger.info(f"Retrieved {len(requests)} access requests (status: {status or 'all'})")
+            return requests
+
+        except Exception as e:
+            logger.error(f"Error getting access requests: {e}")
+            return []
+
+    async def get_all_users_with_access_info(self) -> List[Dict]:
+        """
+        Get all users with their access status information from access_requests collection.
+
+        Returns:
+            List of user dictionaries with access info
+        """
+        try:
+            # Get all access requests (all statuses)
+            all_requests = await self.get_access_requests(status=None)
+            return all_requests
+
+        except Exception as e:
+            logger.error(f"Error getting all users with access info: {e}")
+            return []
+
+    async def migrate_env_users_to_firebase(self) -> int:
+        """
+        Migrate users from environment variable to Firebase.
+
+        Returns:
+            Number of users migrated
+        """
+        try:
+            # Get users from environment variable
+            authorized_users_str = os.getenv('AUTHORIZED_TELEGRAM_IDS', '')
+            if not authorized_users_str:
+                logger.info("No users found in environment variable to migrate")
+                return 0
+
+            user_ids = [uid.strip() for uid in authorized_users_str.split(',') if uid.strip()]
+            migrated_count = 0
+
+            for user_id in user_ids:
+                # Check if user already exists in Firebase
+                existing_user = await self._get_authorized_user(user_id)
+                if not existing_user:
+                    success = await self.add_authorized_user(user_id, "system_migration")
+                    if success:
+                        migrated_count += 1
+
+            logger.info(f"Migrated {migrated_count} users from environment to Firebase")
+            return migrated_count
+
+        except Exception as e:
+            logger.error(f"Error migrating users to Firebase: {e}")
+            return 0
+
+    async def _get_authorized_user(self, user_id: str) -> Optional[Dict]:
+        """Get a specific authorized user by ID."""
+        try:
+            user_ref = self.db.collection('authorized_users').document(user_id)
+            user_doc = user_ref.get()
+
+            if user_doc.exists:
+                return user_doc.to_dict()
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"Error getting authorized user {user_id}: {e}")
+            return None
+
+    async def migrate_users_to_access_requests(self) -> Dict[str, int]:
+        """
+        Migrate user access requests from users collection to access_requests collection.
+
+        Returns:
+            Dictionary with migration statistics
+        """
+        try:
+            logger.info("Starting migration from users collection to access_requests collection...")
+
+            # Get all users from the users collection
+            users_ref = self.db.collection('users')
+            docs = users_ref.stream()
+
+            migrated_count = 0
+            skipped_count = 0
+            error_count = 0
+
+            for doc in docs:
+                try:
+                    user_data = doc.to_dict()
+                    user_id = doc.id
+
+                    # Skip if this is already an authorized user (has last_active, created_at, etc.)
+                    if user_data.get('last_active') or user_data.get('created_at'):
+                        logger.info(f"Skipping user {user_id} - appears to be a regular user, not a request")
+                        skipped_count += 1
+                        continue
+
+                    # Check if this looks like an access request (has username, first_name, etc. but no activity)
+                    if not user_data.get('telegram_id') and not user_data.get('username') and not user_data.get('first_name'):
+                        logger.info(f"Skipping user {user_id} - doesn't look like an access request")
+                        skipped_count += 1
+                        continue
+
+                    # Check if request already exists in access_requests
+                    existing_request = await self.get_access_requests(user_id)
+                    if existing_request:
+                        logger.info(f"Skipping user {user_id} - already exists in access_requests")
+                        skipped_count += 1
+                        continue
+
+                    # Create access request from user data
+                    username = user_data.get('username')
+                    first_name = user_data.get('first_name', user_data.get('firstname'))
+                    last_name = user_data.get('last_name', user_data.get('lastname'))
+
+                    # Create display name
+                    display_name = self._format_display_name(username, first_name, last_name)
+
+                    # Create access request
+                    request_data = {
+                        'user_id': user_id,
+                        'username': username,
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'display_name': display_name,
+                        'requested_at': user_data.get('timestamp', datetime.now()),
+                        'status': 'pending'
+                    }
+
+                    # Save to access_requests collection
+                    access_requests_ref = self.db.collection('access_requests').document(user_id)
+                    access_requests_ref.set(request_data)
+
+                    logger.info(f"Migrated user {user_id} ({display_name}) to access_requests")
+                    migrated_count += 1
+
+                except Exception as e:
+                    logger.error(f"Error migrating user {doc.id}: {e}")
+                    error_count += 1
+
+            result = {
+                'migrated': migrated_count,
+                'skipped': skipped_count,
+                'errors': error_count,
+                'total_processed': migrated_count + skipped_count + error_count
+            }
+
+            logger.info(f"Migration completed: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error during users to access_requests migration: {e}")
+            return {'migrated': 0, 'skipped': 0, 'errors': 1, 'total_processed': 0}
+
+    async def inspect_users_collection(self) -> Dict:
+        """
+        Inspect the users collection to understand the data structure.
+
+        Returns:
+            Dictionary with sample data and statistics
+        """
+        try:
+            logger.info("Inspecting users collection...")
+
+            users_ref = self.db.collection('users')
+            docs = users_ref.limit(10).stream()  # Get first 10 users as sample
+
+            sample_users = []
+            total_count = 0
+
+            for doc in docs:
+                user_data = doc.to_dict()
+                user_id = doc.id
+
+                # Anonymize the data for inspection
+                sample_data = {
+                    'user_id': user_id,
+                    'has_username': bool(user_data.get('username')),
+                    'has_first_name': bool(user_data.get('first_name') or user_data.get('firstname')),
+                    'has_last_name': bool(user_data.get('last_name') or user_data.get('lastname')),
+                    'has_telegram_id': bool(user_data.get('telegram_id')),
+                    'has_created_at': bool(user_data.get('created_at')),
+                    'has_last_active': bool(user_data.get('last_active')),
+                    'has_timestamp': bool(user_data.get('timestamp')),
+                    'fields': list(user_data.keys())
+                }
+
+                sample_users.append(sample_data)
+                total_count += 1
+
+            # Get total count
+            try:
+                total_docs = len(list(users_ref.stream()))
+            except:
+                total_docs = "unknown"
+
+            result = {
+                'total_users': total_docs,
+                'sample_count': total_count,
+                'sample_users': sample_users
+            }
+
+            logger.info(f"Users collection inspection: {total_docs} total users, {total_count} sampled")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error inspecting users collection: {e}")
+            return {'error': str(e)}

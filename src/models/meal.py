@@ -89,6 +89,8 @@ class Meal:
     food_items: List[FoodItem] = None
     nutrition: NutritionData = None
     confidence: str = 'medium'
+    portion_multiplier: float = 1.0
+    raw_nutrition: Optional[NutritionData] = None  # Original nutrition before portion adjustment
     
     def __post_init__(self):
         """Initialize defaults after creation."""
@@ -101,7 +103,7 @@ class Meal:
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for Firebase storage."""
-        return {
+        meal_dict = {
             'user_id': self.user_id,
             'timestamp': self.timestamp,
             'input_type': self.input_type,
@@ -109,12 +111,23 @@ class Meal:
             'food_description': self.food_description,
             'food_items': [item.to_dict() for item in self.food_items],
             'nutrition': self.nutrition.to_dict(),
-            'confidence': self.confidence
+            'confidence': self.confidence,
+            'portion_multiplier': self.portion_multiplier
         }
+
+        # Add raw nutrition if available
+        if self.raw_nutrition:
+            meal_dict['raw_nutrition'] = self.raw_nutrition.to_dict()
+
+        return meal_dict
     
     @classmethod
     def from_dict(cls, data: Dict, meal_id: Optional[str] = None) -> 'Meal':
         """Create from dictionary."""
+        raw_nutrition = None
+        if 'raw_nutrition' in data:
+            raw_nutrition = NutritionData.from_dict(data['raw_nutrition'])
+
         return cls(
             id=meal_id,
             user_id=data.get('user_id', ''),
@@ -124,7 +137,9 @@ class Meal:
             food_description=data.get('food_description', ''),
             food_items=[FoodItem.from_dict(item) for item in data.get('food_items', [])],
             nutrition=NutritionData.from_dict(data.get('nutrition', {})),
-            confidence=data.get('confidence', 'medium')
+            confidence=data.get('confidence', 'medium'),
+            portion_multiplier=data.get('portion_multiplier', 1.0),
+            raw_nutrition=raw_nutrition
         )
     
     def add_food_item(self, food_item: FoodItem):

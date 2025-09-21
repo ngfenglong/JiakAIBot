@@ -14,15 +14,16 @@ class NutritionixService:
         if not self.app_id or not self.api_key:
             logger.error("Nutritionix credentials not found in environment variables")
     
-    async def get_nutrition_data(self, food_description: str) -> Dict:
+    async def get_nutrition_data(self, food_description: str, portion_multiplier: float = 1.0) -> Dict:
         """
         Get nutrition data for a food description from Nutritionix API.
-        
+
         Args:
             food_description: Description of the food item(s)
-            
+            portion_multiplier: Multiplier to adjust nutrition values (e.g., 1.5 for 1.5x portion)
+
         Returns:
-            Dictionary containing nutrition information
+            Dictionary containing nutrition information with portion adjustments
         """
         try:
             headers = {
@@ -45,7 +46,7 @@ class NutritionixService:
                     
                     if response.status == 200:
                         data = await response.json()
-                        return self._process_nutrition_data(data)
+                        return self._process_nutrition_data(data, portion_multiplier)
                     else:
                         error_text = await response.text()
                         logger.error(f"Nutritionix API error: {response.status} - {error_text}")
@@ -55,15 +56,16 @@ class NutritionixService:
             logger.error(f"Error getting nutrition data: {e}")
             return self._get_default_nutrition_data()
     
-    def _process_nutrition_data(self, data: Dict) -> Dict:
+    def _process_nutrition_data(self, data: Dict, portion_multiplier: float = 1.0) -> Dict:
         """
         Process raw Nutritionix API response into simplified nutrition data.
-        
+
         Args:
             data: Raw API response data
-            
+            portion_multiplier: Multiplier to adjust nutrition values
+
         Returns:
-            Simplified nutrition dictionary
+            Simplified nutrition dictionary with portion adjustments
         """
         try:
             foods = data.get('foods', [])
@@ -108,16 +110,35 @@ class NutritionixService:
                     'fat': fat
                 })
             
+            # Apply portion multiplier to totals
+            adjusted_calories = total_calories * portion_multiplier
+            adjusted_protein = total_protein * portion_multiplier
+            adjusted_carbs = total_carbs * portion_multiplier
+            adjusted_fat = total_fat * portion_multiplier
+            adjusted_fiber = total_fiber * portion_multiplier
+            adjusted_sugar = total_sugar * portion_multiplier
+            adjusted_sodium = total_sodium * portion_multiplier
+
             nutrition_data = {
-                'calories': round(total_calories, 1),
-                'protein': round(total_protein, 1),
-                'carbs': round(total_carbs, 1),
-                'fat': round(total_fat, 1),
-                'fiber': round(total_fiber, 1),
-                'sugar': round(total_sugar, 1),
-                'sodium': round(total_sodium, 1),
+                'calories': round(adjusted_calories, 1),
+                'protein': round(adjusted_protein, 1),
+                'carbs': round(adjusted_carbs, 1),
+                'fat': round(adjusted_fat, 1),
+                'fiber': round(adjusted_fiber, 1),
+                'sugar': round(adjusted_sugar, 1),
+                'sodium': round(adjusted_sodium, 1),
                 'food_items': food_items,
-                'total_items': len(foods)
+                'total_items': len(foods),
+                'portion_multiplier': portion_multiplier,
+                'raw_nutrition': {
+                    'calories': round(total_calories, 1),
+                    'protein': round(total_protein, 1),
+                    'carbs': round(total_carbs, 1),
+                    'fat': round(total_fat, 1),
+                    'fiber': round(total_fiber, 1),
+                    'sugar': round(total_sugar, 1),
+                    'sodium': round(total_sodium, 1)
+                }
             }
             
             logger.info(f"Processed nutrition data: {nutrition_data}")

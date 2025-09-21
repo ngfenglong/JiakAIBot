@@ -96,10 +96,10 @@ class JiakAI:
             return
         
         # Log the access request
-        success = log_access_request(
-            user_id, 
-            user.username, 
-            user.first_name, 
+        success = await log_access_request(
+            user_id,
+            user.username,
+            user.first_name,
             user.last_name
         )
         
@@ -125,7 +125,608 @@ class JiakAI:
             )
         
         await update.message.reply_text(message, parse_mode='Markdown')
-    
+
+    async def add_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add a user to authorized list - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        # Parse command arguments
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "📝 Usage: /add_user <telegram_id>\n\n"
+                "Example: /add_user 123456789"
+            )
+            return
+
+        target_user_id = args[0].strip()
+
+        try:
+            # Add user to Firebase
+            success = await self.firebase_service.add_authorized_user(target_user_id, admin_user_id)
+
+            if success:
+                await update.message.reply_text(
+                    f"✅ User {target_user_id} has been added to authorized users.\n"
+                    f"They can now use the bot."
+                )
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+            else:
+                await update.message.reply_text(f"❌ Failed to add user {target_user_id}. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error in add_user command: {e}")
+            await update.message.reply_text("❌ An error occurred while adding the user.")
+
+    async def remove_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Remove a user from authorized list - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        # Parse command arguments
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "📝 Usage: /remove_user <telegram_id>\n\n"
+                "Example: /remove_user 123456789"
+            )
+            return
+
+        target_user_id = args[0].strip()
+
+        try:
+            # Remove user from Firebase
+            success = await self.firebase_service.remove_authorized_user(target_user_id, admin_user_id)
+
+            if success:
+                await update.message.reply_text(
+                    f"✅ User {target_user_id} has been removed from authorized users.\n"
+                    f"They can no longer use the bot."
+                )
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+            else:
+                await update.message.reply_text(f"❌ Failed to remove user {target_user_id}. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error in remove_user command: {e}")
+            await update.message.reply_text("❌ An error occurred while removing the user.")
+
+    async def list_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all authorized users - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            # Get authorized users from Firebase
+            users = await self.firebase_service.list_authorized_users()
+
+            if not users:
+                await update.message.reply_text("📝 No authorized users found in Firebase.")
+                return
+
+            response = f"👥 Authorized Users ({len(users)} total):\n\n"
+
+            for i, user in enumerate(users[:10], 1):  # Limit to first 10 users
+                user_id = user.get('user_id', 'Unknown')
+                added_at = user.get('added_at', 'Unknown')
+                added_by = user.get('added_by', 'Unknown')
+
+                if isinstance(added_at, datetime):
+                    added_at_str = added_at.strftime('%Y-%m-%d %H:%M')
+                else:
+                    added_at_str = str(added_at)
+
+                response += f"{i}. User ID: `{user_id}`\n"
+                response += f"   Added: {added_at_str}\n"
+                response += f"   Added by: {added_by}\n\n"
+
+            if len(users) > 10:
+                response += f"... and {len(users) - 10} more users"
+
+            await update.message.reply_text(response, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in list_users command: {e}")
+            await update.message.reply_text("❌ An error occurred while listing users.")
+
+    async def reload_access_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Reload access control cache - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            # Reload access control cache
+            user_count = await access_control_module.access_control.reload_authorized_users()
+
+            await update.message.reply_text(
+                f"🔄 Access control cache refreshed!\n"
+                f"📊 Currently authorized users: {user_count}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error in reload_access command: {e}")
+            await update.message.reply_text("❌ An error occurred while reloading access control.")
+
+    async def migrate_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Migrate users from environment to Firebase - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            # Migrate users from environment to Firebase
+            migrated_count = await self.firebase_service.migrate_env_users_to_firebase()
+
+            if migrated_count > 0:
+                await update.message.reply_text(
+                    f"✅ Migration completed!\n"
+                    f"📊 Migrated {migrated_count} users from environment to Firebase.\n\n"
+                    f"🔄 Refreshing access control cache..."
+                )
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+                await update.message.reply_text("✅ Access control cache refreshed!")
+            else:
+                await update.message.reply_text(
+                    "ℹ️ No new users to migrate.\n"
+                    "All users from environment variable are already in Firebase."
+                )
+
+        except Exception as e:
+            logger.error(f"Error in migrate_users command: {e}")
+            await update.message.reply_text("❌ An error occurred during migration.")
+
+    async def inspect_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Inspect users collection to see existing requests - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            await update.message.reply_text("🔍 Inspecting users collection...")
+
+            # Inspect the users collection
+            inspection_result = await self.firebase_service.inspect_users_collection()
+
+            if 'error' in inspection_result:
+                await update.message.reply_text(f"❌ Error inspecting users collection: {inspection_result['error']}")
+                return
+
+            total_users = inspection_result.get('total_users', 0)
+            sample_users = inspection_result.get('sample_users', [])
+
+            response = f"🔍 **Users Collection Inspection**\n\n"
+            response += f"📊 Total users in collection: {total_users}\n\n"
+
+            if sample_users:
+                response += "📋 Sample users (first 10):\n\n"
+                for i, user in enumerate(sample_users, 1):
+                    user_id = user['user_id']
+                    fields = user.get('fields', [])
+
+                    # Escape field names to avoid markdown issues
+                    safe_fields = [field.replace('_', '\\_') for field in fields]
+
+                    response += f"{i}. User `{user_id}`:\n"
+                    response += f"   • Has username: {user.get('has_username', False)}\n"
+                    response += f"   • Has name: {user.get('has_first_name', False)}\n"
+                    response += f"   • Is regular user: {user.get('has_created_at', False)}\n"
+                    response += f"   • Fields: {', '.join(safe_fields)}\n\n"
+            else:
+                response += "📝 No users found in collection.\n"
+
+            await update.message.reply_text(response, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in inspect_users command: {e}")
+            await update.message.reply_text("❌ An error occurred while inspecting users collection.")
+
+    async def migrate_requests_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Migrate user requests to access_requests collection - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            await update.message.reply_text("🚚 Starting migration from users to access_requests...")
+
+            # Perform migration
+            migration_result = await self.firebase_service.migrate_users_to_access_requests()
+
+            migrated = migration_result.get('migrated', 0)
+            skipped = migration_result.get('skipped', 0)
+            errors = migration_result.get('errors', 0)
+            total_processed = migration_result.get('total_processed', 0)
+
+            response = f"✅ **Migration Completed**\n\n"
+            response += f"📊 **Results:**\n"
+            response += f"• Migrated: {migrated} requests\n"
+            response += f"• Skipped: {skipped} users (already exist or regular users)\n"
+            response += f"• Errors: {errors}\n"
+            response += f"• Total processed: {total_processed}\n\n"
+
+            if migrated > 0:
+                response += f"🎉 Successfully migrated {migrated} requests!\n"
+                response += f"You can now use `/list_requests` to see them."
+            elif skipped > 0:
+                response += f"ℹ️ Found {skipped} users but they appear to be regular users, not access requests."
+            else:
+                response += f"📝 No access requests found to migrate."
+
+            await update.message.reply_text(response, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in migrate_requests command: {e}")
+            await update.message.reply_text("❌ An error occurred during requests migration.")
+
+    async def admin_panel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show admin control panel - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if user is admin (environment variable check)
+        if not is_admin(admin_user_id):
+            await update.message.reply_text("❌ Access denied. Admin privileges required.")
+            return
+
+        try:
+            # Get pending requests count
+            pending_requests = await self.firebase_service.get_access_requests(status='pending')
+            approved_users = await self.firebase_service.get_access_requests(status='approved')
+
+            response = f"👑 **Admin Control Panel**\n\n"
+            response += f"📊 **Quick Stats:**\n"
+            response += f"• Pending requests: {len(pending_requests)}\n"
+            response += f"• Approved users: {len(approved_users)}\n\n"
+            response += f"🎛️ **Available Commands:**\n"
+            response += f"• `/list_requests` - Review pending access requests\n"
+            response += f"• `/manage_users` - Manage user access permissions\n"
+            response += f"• `/reload_access` - Refresh access cache\n"
+
+            await update.message.reply_text(response, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in admin_panel command: {e}")
+            await update.message.reply_text("❌ An error occurred while loading admin panel.")
+
+    async def list_requests_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List pending access requests with one-click approve/deny - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if user is admin (environment variable check)
+        if not is_admin(admin_user_id):
+            await update.message.reply_text("❌ Access denied. Admin privileges required.")
+            return
+
+        try:
+            # Get pending access requests
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await update.message.reply_text(
+                    "📝 No pending access requests.\n\n"
+                    "💡 Users can request access with /request_access"
+                )
+                return
+
+            # Create response with inline buttons for each request
+            response = f"📋 **Pending Access Requests** ({len(requests)} total):\n\n"
+
+            keyboard = []
+
+            for i, request in enumerate(requests[:5], 1):  # Limit to 5 requests per message
+                user_id = request.get('user_id', 'Unknown')
+                display_name = request.get('display_name', 'Unknown User')
+                requested_at = request.get('requested_at', 'Unknown')
+
+                if isinstance(requested_at, datetime):
+                    requested_at_str = requested_at.strftime('%m-%d %H:%M')
+                else:
+                    requested_at_str = str(requested_at)[:10] if requested_at else 'Unknown'
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+                response += f"   Requested: {requested_at_str}\n\n"
+
+                # Add approve/deny buttons for this request
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✅ Approve {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"approve_user_{user_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"❌ Deny {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"deny_user_{user_id}"
+                    )
+                ])
+
+            if len(requests) > 5:
+                response += f"... and {len(requests) - 5} more requests\n"
+
+            # Add bulk actions
+            if len(requests) > 1:
+                keyboard.append([
+                    InlineKeyboardButton("✅ Approve All", callback_data="approve_all_users"),
+                    InlineKeyboardButton("❌ Deny All", callback_data="deny_all_users")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_requests")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in list_requests command: {e}")
+            await update.message.reply_text("❌ An error occurred while listing access requests.")
+
+    async def manage_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manage user access permissions - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if user is admin (environment variable check)
+        if not is_admin(admin_user_id):
+            await update.message.reply_text("❌ Access denied. Admin privileges required.")
+            return
+
+        try:
+            # Get all users with access info
+            users = await self.firebase_service.get_all_users_with_access_info()
+
+            if not users:
+                await update.message.reply_text("📝 No users found in system.")
+                return
+
+            # Separate by status
+            approved_users = [u for u in users if u.get('access_status') == 'approved']
+            pending_users = [u for u in users if u.get('access_status') == 'pending']
+            revoked_users = [u for u in users if u.get('access_status') == 'revoked']
+            reinstate_users = [u for u in users if u.get('access_status') == 'reinstate_request']
+
+            response = f"👥 **User Access Management**\n\n"
+            response += f"📊 **Status Summary:**\n"
+            response += f"• ✅ Approved: {len(approved_users)}\n"
+            response += f"• ⏳ Pending: {len(pending_users)}\n"
+            response += f"• 🚫 Revoked: {len(revoked_users)}\n"
+            response += f"• 🔄 Reinstate Requests: {len(reinstate_users)}\n\n"
+
+            keyboard = []
+
+            if approved_users:
+                keyboard.append([
+                    InlineKeyboardButton("✅ View Approved Users", callback_data="view_approved_users")
+                ])
+
+            if pending_users:
+                keyboard.append([
+                    InlineKeyboardButton("⏳ View Pending Requests", callback_data="view_pending_users")
+                ])
+
+            if revoked_users:
+                keyboard.append([
+                    InlineKeyboardButton("🚫 View Revoked Users", callback_data="view_revoked_users")
+                ])
+
+            if reinstate_users:
+                keyboard.append([
+                    InlineKeyboardButton("🔄 View Reinstate Requests", callback_data="view_reinstate_users")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_user_management")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in manage_users command: {e}")
+            await update.message.reply_text("❌ An error occurred while loading user management.")
+
+    async def list_requests_command_old(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List pending access requests with one-click approve/deny - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            # Get pending access requests from Firebase
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await update.message.reply_text(
+                    "📝 No pending access requests.\n\n"
+                    "💡 Users can request access with /request_access"
+                )
+                return
+
+            # Create response with inline buttons for each request
+            response = f"📋 Pending Access Requests ({len(requests)} total):\n\n"
+
+            keyboard = []
+
+            for i, request in enumerate(requests[:5], 1):  # Limit to 5 requests per message
+                user_id = request.get('user_id', 'Unknown')
+                display_name = request.get('display_name', 'Unknown User')
+                requested_at = request.get('requested_at', 'Unknown')
+
+                if isinstance(requested_at, datetime):
+                    requested_at_str = requested_at.strftime('%m-%d %H:%M')
+                else:
+                    requested_at_str = str(requested_at)[:10]
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+                response += f"   Requested: {requested_at_str}\n\n"
+
+                # Add approve/deny buttons for this request
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✅ Approve {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"approve_request_{user_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"❌ Deny {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"deny_request_{user_id}"
+                    )
+                ])
+
+            if len(requests) > 5:
+                response += f"... and {len(requests) - 5} more requests\n"
+                keyboard.append([
+                    InlineKeyboardButton("📄 View More", callback_data="view_more_requests")
+                ])
+
+            # Add bulk actions
+            if len(requests) > 1:
+                keyboard.append([
+                    InlineKeyboardButton("✅ Approve All", callback_data="approve_all_requests"),
+                    InlineKeyboardButton("❌ Deny All", callback_data="deny_all_requests")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_requests")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in list_requests command: {e}")
+            await update.message.reply_text("❌ An error occurred while listing access requests.")
+
+    async def quick_add_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Quick add users from recent requests - Admin only."""
+        if not update.effective_user or not update.message:
+            return
+
+        admin_user_id = str(update.effective_user.id)
+
+        # Check if sender is authorized (admin check)
+        from src.utils.access_control import check_user_access_async
+        if not await check_user_access_async(admin_user_id):
+            await update.message.reply_text("❌ You don't have permission to use admin commands.")
+            return
+
+        try:
+            # Get recent pending requests
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await update.message.reply_text(
+                    "📝 No pending requests to add.\n\n"
+                    "💡 Use /list_requests to see pending access requests"
+                )
+                return
+
+            # Create quick-add buttons for each request
+            keyboard = []
+            response = f"⚡ Quick Add Users ({len(requests)} pending):\n\n"
+
+            for i, request in enumerate(requests[:6], 1):  # Limit to 6 for better UI
+                user_id = request.get('user_id', 'Unknown')
+                display_name = request.get('display_name', 'Unknown User')
+
+                response += f"{i}. {display_name} (`{user_id}`)\n"
+
+                # Create quick add button
+                button_text = f"➕ Add {display_name[:20]}{'...' if len(display_name) > 20 else ''}"
+                keyboard.append([
+                    InlineKeyboardButton(button_text, callback_data=f"quick_add_{user_id}")
+                ])
+
+            if len(requests) > 6:
+                response += f"\n... and {len(requests) - 6} more\n"
+
+            # Add bulk action
+            if len(requests) > 1:
+                keyboard.append([
+                    InlineKeyboardButton("✅ Add All Pending", callback_data="quick_add_all")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("📋 View Full Requests", callback_data="view_full_requests")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in quick_add command: {e}")
+            await update.message.reply_text("❌ An error occurred while loading quick add options.")
+
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle photo messages."""
         if not update.effective_user or not update.message or not update.message.photo:
@@ -148,20 +749,25 @@ class JiakAI:
             await file.download_to_drive(file_path)
             
             analysis_result = await self.openai_service.analyze_food_image(file_path)
-            
+
             os.remove(file_path)
-            
+
             # Handle edge cases - no food detected or analysis failed
             if not analysis_result['success']:
                 await self._handle_analysis_failure(update, analysis_result)
                 return
-            
+
             food_description = analysis_result['description']
             confidence = analysis_result['confidence']
-            
-            nutrition_data = await self.nutritionix_service.get_nutrition_data(food_description)
+            portion_data = analysis_result.get('portion_data', {'overall_multiplier': 1.0})
+            portion_multiplier = portion_data.get('overall_multiplier', 1.0)
+
+            nutrition_data = await self.nutritionix_service.get_nutrition_data(food_description, portion_multiplier)
             
             # Store pending meal data in context for confirmation
+            # Extract raw nutrition data if available
+            raw_nutrition = nutrition_data.get('raw_nutrition', {})
+
             pending_meal = {
                 'timestamp': datetime.now(),
                 'input_type': 'photo',
@@ -169,7 +775,10 @@ class JiakAI:
                 'food_description': food_description,
                 'nutrition': nutrition_data,
                 'user_id': user_id,
-                'confidence': confidence
+                'confidence': confidence,
+                'portion_multiplier': portion_multiplier,
+                'portion_data': portion_data,
+                'raw_nutrition': raw_nutrition
             }
             
             # Store in context user_data for callback
@@ -213,23 +822,33 @@ class JiakAI:
         
         user_id = str(update.effective_user.id)
         text = update.message.text
-        
+
+        # Check if user is entering a custom portion multiplier
+        if 'custom_portion_meal_id' in context.user_data:
+            await self._handle_custom_portion_input(update, context, text)
+            return
+
         try:
             await update.message.reply_text("💬 Analyzing your meal description...")
             
             analysis_result = await self.openai_service.analyze_food_text(text)
-            
+
             # Handle edge cases - no food detected or analysis failed
             if not analysis_result['success']:
                 await self._handle_analysis_failure(update, analysis_result)
                 return
-            
+
             food_description = analysis_result['description']
             confidence = analysis_result['confidence']
-            
-            nutrition_data = await self.nutritionix_service.get_nutrition_data(food_description)
+            portion_data = analysis_result.get('portion_data', {'overall_multiplier': 1.0})
+            portion_multiplier = portion_data.get('overall_multiplier', 1.0)
+
+            nutrition_data = await self.nutritionix_service.get_nutrition_data(food_description, portion_multiplier)
             
             # Store pending meal data in context for confirmation
+            # Extract raw nutrition data if available
+            raw_nutrition = nutrition_data.get('raw_nutrition', {})
+
             pending_meal = {
                 'timestamp': datetime.now(),
                 'input_type': 'text',
@@ -237,7 +856,10 @@ class JiakAI:
                 'food_description': food_description,
                 'nutrition': nutrition_data,
                 'user_id': user_id,
-                'confidence': confidence
+                'confidence': confidence,
+                'portion_multiplier': portion_multiplier,
+                'portion_data': portion_data,
+                'raw_nutrition': raw_nutrition
             }
             
             # Store in context user_data for callback
@@ -345,7 +967,10 @@ class JiakAI:
         if data == 'request_access':
             await handle_access_request(update, context)
             return
-        
+        elif data == 'request_reinstate':
+            await self._handle_request_reinstate(query, context)
+            return
+
         # Check access for all other callbacks
         if not check_message_access(update):
             await query.answer("❌ Access denied. Please request access first.", show_alert=True)
@@ -359,6 +984,8 @@ class JiakAI:
             await self._handle_adjust_portions(query, context, data)
         elif data.startswith('portion_'):
             await self._handle_portion_change(query, context, data)
+        elif data.startswith('custom_portion_'):
+            await self._handle_custom_portion(query, context, data)
         elif data.startswith('back_'):
             await self._handle_back_to_confirmation(query, context, data)
         elif data.startswith('edit_'):
@@ -397,7 +1024,641 @@ class JiakAI:
             await self._handle_nutrition_adjust(query, context, data, 'carbs')
         elif data.startswith('fat_adjust_'):
             await self._handle_nutrition_adjust(query, context, data, 'fat')
-    
+        elif data.startswith('approve_user_'):
+            await self._handle_approve_user(query, context, data)
+        elif data.startswith('deny_user_'):
+            await self._handle_deny_user(query, context, data)
+        elif data.startswith('revoke_user_'):
+            await self._handle_revoke_user(query, context, data)
+        elif data == 'approve_all_users':
+            await self._handle_approve_all_users(query, context)
+        elif data == 'deny_all_users':
+            await self._handle_deny_all_users(query, context)
+        elif data == 'refresh_requests':
+            await self._handle_refresh_requests(query, context)
+        elif data == 'refresh_user_management':
+            await self._handle_refresh_user_management(query, context)
+        elif data == 'view_approved_users':
+            await self._handle_view_approved_users(query, context)
+        elif data == 'view_pending_users':
+            await self._handle_view_pending_users(query, context)
+        elif data == 'view_revoked_users':
+            await self._handle_view_revoked_users(query, context)
+        elif data == 'view_reinstate_users':
+            await self._handle_view_reinstate_users(query, context)
+        elif data.startswith('reapprove_user_'):
+            await self._handle_reapprove_user(query, context, data)
+        elif data.startswith('approve_reinstate_'):
+            await self._handle_approve_reinstate(query, context, data)
+        elif data.startswith('deny_reinstate_'):
+            await self._handle_deny_reinstate(query, context, data)
+
+    async def _handle_approve_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle user approval."""
+        user_id = data.replace('approve_user_', '')
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Approve user access
+            success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
+
+            if success:
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+
+                # Send notification to user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "🎉 **Access Approved!**\n\n"
+                            "Welcome to JiakAI! Your access request has been approved.\n\n"
+                            "You can now:\n"
+                            "• Track meals by sending photos or descriptions\n"
+                            "• View your nutrition history with /history\n"
+                            "• Get meal summaries and insights\n\n"
+                            "Start by sending a photo of your meal or describing what you ate! 🍽️"
+                        ),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Could not notify user {user_id}: {e}")
+
+                await query.edit_message_text(
+                    f"✅ **User Approved**\n\n"
+                    f"User {user_id} has been approved for access.\n"
+                    f"They can now use the bot.\n\n"
+                    f"📬 User has been notified.\n"
+                    f"🔄 Access control cache refreshed."
+                )
+            else:
+                await query.edit_message_text("❌ Failed to approve user. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error approving user: {e}")
+            await query.edit_message_text("❌ An error occurred while approving the user.")
+
+    async def _handle_deny_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle user denial."""
+        user_id = data.replace('deny_user_', '')
+
+        try:
+            # Update access request status to denied
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            access_request_ref.update({
+                'status': 'denied',
+                'denied_at': datetime.now()
+            })
+
+            await query.edit_message_text(
+                f"❌ **User Denied**\n\n"
+                f"Access request from user {user_id} has been denied."
+            )
+
+        except Exception as e:
+            logger.error(f"Error denying user: {e}")
+            await query.edit_message_text("❌ An error occurred while denying the user.")
+
+    async def _handle_revoke_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle user access revocation."""
+        user_id = data.replace('revoke_user_', '')
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Revoke user access
+            success = await self.firebase_service.revoke_user_access(user_id, admin_user_id)
+
+            if success:
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+
+                await query.edit_message_text(
+                    f"🚫 **User Access Revoked**\n\n"
+                    f"User {user_id} access has been revoked.\n"
+                    f"They can no longer use the bot.\n\n"
+                    f"🔄 Access control cache refreshed."
+                )
+            else:
+                await query.edit_message_text("❌ Failed to revoke user access. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error revoking user access: {e}")
+            await query.edit_message_text("❌ An error occurred while revoking user access.")
+
+    async def _handle_reapprove_user(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle user re-approval from revoked status."""
+        user_id = data.replace('reapprove_user_', '')
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Re-approve user access (similar to approve_user_access)
+            success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
+
+            if success:
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+
+                # Send notification to user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "🎉 **Access Restored!**\n\n"
+                            "Your access to JiakAI has been restored!\n"
+                            "You can now use the bot again.\n\n"
+                            "Welcome back! 🙌"
+                        ),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Could not notify user {user_id}: {e}")
+
+                await query.edit_message_text(
+                    f"✅ **User Re-approved**\n\n"
+                    f"User {user_id} has been re-approved!\n"
+                    f"They can now use the bot again.\n\n"
+                    f"📬 User has been notified.\n"
+                    f"🔄 Access control cache refreshed."
+                )
+            else:
+                await query.edit_message_text("❌ Failed to re-approve user. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error re-approving user: {e}")
+            await query.edit_message_text("❌ An error occurred while re-approving user.")
+
+    async def _handle_approve_reinstate(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle approval of reinstatement request."""
+        user_id = data.replace('approve_reinstate_', '')
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Approve the reinstatement (same as normal approval)
+            success = await self.firebase_service.approve_user_access(user_id, admin_user_id)
+
+            if success:
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+
+                # Send notification to user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "🎉 **Access Reinstated!**\n\n"
+                            "Your access to JiakAI has been restored!\n"
+                            "You can now use the bot again.\n\n"
+                            "Welcome back! 🙌"
+                        ),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Could not notify user {user_id}: {e}")
+
+                await query.edit_message_text(
+                    f"✅ **Reinstatement Approved**\n\n"
+                    f"User {user_id} has been reinstated!\n"
+                    f"They can now use the bot again.\n\n"
+                    f"📬 User has been notified.\n"
+                    f"🔄 Access control cache refreshed."
+                )
+            else:
+                await query.edit_message_text("❌ Failed to approve reinstatement. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error approving reinstatement for user {user_id}: {e}")
+            await query.edit_message_text("❌ An error occurred while approving reinstatement.")
+
+    async def _handle_deny_reinstate(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle denial of reinstatement request."""
+        user_id = data.replace('deny_reinstate_', '')
+
+        try:
+            # Update status back to denied (permanently denied)
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            access_request_ref.update({
+                'status': 'denied',
+                'denied_at': datetime.now()
+            })
+
+            # Send notification to user
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "❌ **Reinstatement Request Denied**\n\n"
+                        "Your request to restore access has been reviewed and denied.\n\n"
+                        "If you have questions about this decision, please contact the administrator directly."
+                    ),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Could not notify user {user_id}: {e}")
+
+            await query.edit_message_text(
+                f"❌ **Reinstatement Denied**\n\n"
+                f"Reinstatement request for user {user_id} has been denied.\n\n"
+                f"📬 User has been notified."
+            )
+
+        except Exception as e:
+            logger.error(f"Error denying reinstatement for user {user_id}: {e}")
+            await query.edit_message_text("❌ An error occurred while denying reinstatement.")
+
+    async def _handle_view_approved_users(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view approved users."""
+        try:
+            approved_users = await self.firebase_service.get_access_requests(status='approved')
+
+            if not approved_users:
+                await query.edit_message_text("📝 No approved users found.")
+                return
+
+            response = f"✅ **Approved Users** ({len(approved_users)} total):\n\n"
+
+            keyboard = []
+            for i, user in enumerate(approved_users[:5], 1):
+                user_id = user.get('user_id', 'Unknown')
+                display_name = user.get('display_name', 'Unknown User')
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+
+                # Add revoke button
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"🚫 Revoke {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"revoke_user_{user_id}"
+                    )
+                ])
+
+            if len(approved_users) > 5:
+                response += f"\n... and {len(approved_users) - 5} more users"
+
+            keyboard.append([
+                InlineKeyboardButton("🔙 Back to User Management", callback_data="refresh_user_management")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error viewing approved users: {e}")
+            await query.edit_message_text("❌ An error occurred while loading approved users.")
+
+    async def _handle_view_pending_users(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view pending users (same as refresh requests)."""
+        await self._handle_refresh_requests(query, context)
+
+    async def _handle_view_revoked_users(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view revoked users."""
+        try:
+            revoked_users = await self.firebase_service.get_access_requests(status='revoked')
+
+            if not revoked_users:
+                await query.edit_message_text("📝 No revoked users found.")
+                return
+
+            response = f"🚫 **Revoked Users** ({len(revoked_users)} total):\n\n"
+
+            keyboard = []
+
+            for i, user in enumerate(revoked_users[:5], 1):  # Limit to 5 for buttons
+                user_id = user.get('user_id', 'Unknown')
+                display_name = user.get('display_name', 'Unknown User')
+                revoked_at = user.get('revoked_at')
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+                if revoked_at:
+                    if isinstance(revoked_at, datetime):
+                        response += f"   Revoked: {revoked_at.strftime('%m-%d %H:%M')}\n"
+                response += "\n"
+
+                # Add re-approve button for each user
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"🔄 Re-approve {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"reapprove_user_{user_id}"
+                    )
+                ])
+
+            if len(revoked_users) > 5:
+                response += f"... and {len(revoked_users) - 5} more users\n"
+
+            keyboard.append([
+                InlineKeyboardButton("🔙 Back to User Management", callback_data="refresh_user_management")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error viewing revoked users: {e}")
+            await query.edit_message_text("❌ An error occurred while loading revoked users.")
+
+    async def _handle_view_reinstate_users(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view reinstate request users."""
+        try:
+            reinstate_users = await self.firebase_service.get_access_requests(status='reinstate_request')
+
+            if not reinstate_users:
+                await query.edit_message_text("📝 No reinstatement requests found.")
+                return
+
+            response = f"🔄 **Reinstate Requests** ({len(reinstate_users)} total):\n\n"
+
+            keyboard = []
+
+            for i, user in enumerate(reinstate_users[:5], 1):  # Limit to 5 for buttons
+                user_id = user.get('user_id', 'Unknown')
+                display_name = user.get('display_name', 'Unknown User')
+                reinstate_requested_at = user.get('reinstate_requested_at')
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+                if reinstate_requested_at:
+                    if isinstance(reinstate_requested_at, datetime):
+                        response += f"   Requested: {reinstate_requested_at.strftime('%m-%d %H:%M')}\n"
+                response += "\n"
+
+                # Add approve/deny buttons for each reinstatement request
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✅ Approve {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"approve_reinstate_{user_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"❌ Deny {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"deny_reinstate_{user_id}"
+                    )
+                ])
+
+            if len(reinstate_users) > 5:
+                response += f"... and {len(reinstate_users) - 5} more requests\n"
+
+            keyboard.append([
+                InlineKeyboardButton("🔙 Back to User Management", callback_data="refresh_user_management")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error viewing reinstate users: {e}")
+            await query.edit_message_text("❌ An error occurred while loading reinstatement requests.")
+
+    async def _handle_refresh_user_management(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh user management (redirect to manage users)."""
+        # Simulate the manage_users command
+        try:
+            users = await self.firebase_service.get_all_users_with_access_info()
+
+            if not users:
+                await query.edit_message_text("📝 No users found in system.")
+                return
+
+            # Separate by status
+            approved_users = [u for u in users if u.get('access_status') == 'approved']
+            pending_users = [u for u in users if u.get('access_status') == 'pending']
+            revoked_users = [u for u in users if u.get('access_status') == 'revoked']
+
+            response = f"👥 **User Access Management**\n\n"
+            response += f"📊 **Status Summary:**\n"
+            response += f"• ✅ Approved: {len(approved_users)}\n"
+            response += f"• ⏳ Pending: {len(pending_users)}\n"
+            response += f"• 🚫 Revoked: {len(revoked_users)}\n\n"
+
+            keyboard = []
+
+            if approved_users:
+                keyboard.append([
+                    InlineKeyboardButton("✅ View Approved Users", callback_data="view_approved_users")
+                ])
+
+            if pending_users:
+                keyboard.append([
+                    InlineKeyboardButton("⏳ View Pending Requests", callback_data="view_pending_users")
+                ])
+
+            if revoked_users:
+                keyboard.append([
+                    InlineKeyboardButton("🚫 View Revoked Users", callback_data="view_revoked_users")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_user_management")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error refreshing user management: {e}")
+            await query.edit_message_text("❌ An error occurred while refreshing user management.")
+
+    async def _handle_quick_add(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle quick add user."""
+        user_id = data.replace('quick_add_', '')
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Add user to authorized list
+            success = await self.firebase_service.add_authorized_user(user_id, admin_user_id)
+
+            if success:
+                # Update request status
+                await self.firebase_service.update_access_request_status(user_id, 'approved')
+                # Refresh cache
+                await access_control_module.access_control.reload_authorized_users()
+
+                await query.edit_message_text(
+                    f"⚡ **Quick Add Successful**\n\n"
+                    f"User {user_id} has been quickly added.\n"
+                    f"They can now use the bot immediately.\n\n"
+                    f"🔄 Access control updated."
+                )
+            else:
+                await query.edit_message_text("❌ Failed to add user. Please try again.")
+
+        except Exception as e:
+            logger.error(f"Error in quick add: {e}")
+            await query.edit_message_text("❌ An error occurred during quick add.")
+
+    async def _handle_approve_all_requests(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle approve all requests."""
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Get all pending requests
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await query.edit_message_text("📝 No pending requests to approve.")
+                return
+
+            approved_count = 0
+            for request in requests:
+                user_id = request.get('user_id')
+                if user_id:
+                    # Add user and update status
+                    add_success = await self.firebase_service.add_authorized_user(user_id, admin_user_id)
+                    status_success = await self.firebase_service.update_access_request_status(user_id, 'approved')
+
+                    if add_success and status_success:
+                        approved_count += 1
+
+            # Refresh cache
+            await access_control_module.access_control.reload_authorized_users()
+
+            await query.edit_message_text(
+                f"✅ **Bulk Approval Complete**\n\n"
+                f"Approved {approved_count} out of {len(requests)} requests.\n"
+                f"All approved users can now use the bot.\n\n"
+                f"🔄 Access control cache refreshed."
+            )
+
+        except Exception as e:
+            logger.error(f"Error in bulk approval: {e}")
+            await query.edit_message_text("❌ An error occurred during bulk approval.")
+
+    async def _handle_deny_all_requests(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle deny all requests."""
+        try:
+            # Get all pending requests
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await query.edit_message_text("📝 No pending requests to deny.")
+                return
+
+            denied_count = 0
+            for request in requests:
+                user_id = request.get('user_id')
+                if user_id:
+                    success = await self.firebase_service.update_access_request_status(user_id, 'denied')
+                    if success:
+                        denied_count += 1
+
+            await query.edit_message_text(
+                f"❌ **Bulk Denial Complete**\n\n"
+                f"Denied {denied_count} out of {len(requests)} requests."
+            )
+
+        except Exception as e:
+            logger.error(f"Error in bulk denial: {e}")
+            await query.edit_message_text("❌ An error occurred during bulk denial.")
+
+    async def _handle_quick_add_all(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle quick add all pending users."""
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Get all pending requests
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await query.edit_message_text("📝 No pending requests to add.")
+                return
+
+            added_count = 0
+            for request in requests:
+                user_id = request.get('user_id')
+                if user_id:
+                    # Add user and update status
+                    add_success = await self.firebase_service.add_authorized_user(user_id, admin_user_id)
+                    status_success = await self.firebase_service.update_access_request_status(user_id, 'approved')
+
+                    if add_success and status_success:
+                        added_count += 1
+
+            # Refresh cache
+            await access_control_module.access_control.reload_authorized_users()
+
+            await query.edit_message_text(
+                f"⚡ **Quick Add All Complete**\n\n"
+                f"Added {added_count} out of {len(requests)} pending users.\n"
+                f"All users can now use the bot immediately.\n\n"
+                f"🔄 Access control updated."
+            )
+
+        except Exception as e:
+            logger.error(f"Error in quick add all: {e}")
+            await query.edit_message_text("❌ An error occurred during quick add all.")
+
+    async def _handle_refresh_requests(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh requests list."""
+        # Simulate the list_requests command
+        admin_user_id = str(query.from_user.id)
+
+        try:
+            # Get pending access requests from Firebase
+            requests = await self.firebase_service.get_access_requests(status='pending')
+
+            if not requests:
+                await query.edit_message_text(
+                    "📝 No pending access requests.\n\n"
+                    "💡 Users can request access with /request_access"
+                )
+                return
+
+            # Create response with inline buttons for each request
+            response = f"📋 Pending Access Requests ({len(requests)} total):\n\n"
+
+            keyboard = []
+
+            for i, request in enumerate(requests[:5], 1):  # Limit to 5 requests per message
+                user_id = request.get('user_id', 'Unknown')
+                display_name = request.get('display_name', 'Unknown User')
+                requested_at = request.get('requested_at', 'Unknown')
+
+                if isinstance(requested_at, datetime):
+                    requested_at_str = requested_at.strftime('%m-%d %H:%M')
+                else:
+                    requested_at_str = str(requested_at)[:10]
+
+                response += f"{i}. **{display_name}**\n"
+                response += f"   ID: `{user_id}`\n"
+                response += f"   Requested: {requested_at_str}\n\n"
+
+                # Add approve/deny buttons for this request
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✅ Approve {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"approve_request_{user_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"❌ Deny {display_name[:15]}{'...' if len(display_name) > 15 else ''}",
+                        callback_data=f"deny_request_{user_id}"
+                    )
+                ])
+
+            if len(requests) > 5:
+                response += f"... and {len(requests) - 5} more requests\n"
+
+            # Add bulk actions
+            if len(requests) > 1:
+                keyboard.append([
+                    InlineKeyboardButton("✅ Approve All", callback_data="approve_all_requests"),
+                    InlineKeyboardButton("❌ Deny All", callback_data="deny_all_requests")
+                ])
+
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_requests")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error refreshing requests: {e}")
+            await query.edit_message_text("❌ An error occurred while refreshing requests.")
+
+    async def _handle_view_full_requests(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view full requests from quick add."""
+        # Redirect to full requests view
+        await self._handle_refresh_requests(query, context)
+
     async def _handle_confirm_meal(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
         """Confirm and save the meal."""
         meal_id = data.replace('confirm_', '')
@@ -443,15 +1704,27 @@ class JiakAI:
         
         keyboard = [
             [
-                InlineKeyboardButton("0.5x (Half)", callback_data=f"portion_{meal_id}_0.5"),
-                InlineKeyboardButton("0.75x", callback_data=f"portion_{meal_id}_0.75")
+                InlineKeyboardButton("0.25x", callback_data=f"portion_{meal_id}_0.25"),
+                InlineKeyboardButton("0.33x", callback_data=f"portion_{meal_id}_0.33"),
+                InlineKeyboardButton("0.5x", callback_data=f"portion_{meal_id}_0.5")
+            ],
+            [
+                InlineKeyboardButton("0.67x", callback_data=f"portion_{meal_id}_0.67"),
+                InlineKeyboardButton("0.75x", callback_data=f"portion_{meal_id}_0.75"),
+                InlineKeyboardButton("1x", callback_data=f"portion_{meal_id}_1.0")
             ],
             [
                 InlineKeyboardButton("1.25x", callback_data=f"portion_{meal_id}_1.25"),
-                InlineKeyboardButton("1.5x", callback_data=f"portion_{meal_id}_1.5")
+                InlineKeyboardButton("1.5x", callback_data=f"portion_{meal_id}_1.5"),
+                InlineKeyboardButton("1.75x", callback_data=f"portion_{meal_id}_1.75")
             ],
             [
-                InlineKeyboardButton("2x (Double)", callback_data=f"portion_{meal_id}_2.0"),
+                InlineKeyboardButton("2x", callback_data=f"portion_{meal_id}_2.0"),
+                InlineKeyboardButton("2.5x", callback_data=f"portion_{meal_id}_2.5"),
+                InlineKeyboardButton("3x", callback_data=f"portion_{meal_id}_3.0")
+            ],
+            [
+                InlineKeyboardButton("✏️ Custom", callback_data=f"custom_portion_{meal_id}"),
                 InlineKeyboardButton("🔙 Back", callback_data=f"back_{meal_id}")
             ]
         ]
@@ -523,7 +1796,112 @@ class JiakAI:
             meal_data.get('confidence', 'medium')
         )
         await query.edit_message_text(response, reply_markup=reply_markup)
-    
+
+    async def _handle_custom_portion(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
+        """Handle custom portion input request."""
+        meal_id = data.replace('custom_portion_', '')
+
+        # Store the meal_id for the next message
+        context.user_data['custom_portion_meal_id'] = meal_id
+
+        await query.edit_message_text(
+            "✏️ Enter a custom portion multiplier:\n\n"
+            "Examples:\n"
+            "• 0.33 (1/3 portion)\n"
+            "• 0.8 (80% of normal)\n"
+            "• 1.2 (20% extra)\n"
+            "• 2.5 (2.5x portion)\n\n"
+            "Please type a number (0.1 to 10.0):"
+        )
+
+    async def _handle_custom_portion_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+        """Handle custom portion multiplier input."""
+        meal_id = context.user_data.get('custom_portion_meal_id')
+        if not meal_id:
+            await update.message.reply_text("❌ Error: No meal ID found.")
+            return
+
+        try:
+            # Parse the multiplier
+            multiplier = float(text.strip())
+
+            # Validate range
+            if multiplier < 0.1 or multiplier > 10.0:
+                await update.message.reply_text(
+                    "❌ Invalid range. Please enter a number between 0.1 and 10.0.\n"
+                    "Try again:"
+                )
+                return
+
+            # Clear the custom portion state
+            del context.user_data['custom_portion_meal_id']
+
+            # Apply the custom portion (similar to _handle_portion_change)
+            if 'pending_meals' not in context.user_data or meal_id not in context.user_data['pending_meals']:
+                await update.message.reply_text("❌ Meal data not found. Please try again.")
+                return
+
+            meal_data = context.user_data['pending_meals'][meal_id]
+
+            # Get the original food description (might have portion text appended)
+            food_description = meal_data['food_description']
+
+            # Try to get the base description without portion text
+            if '(' in food_description and food_description.endswith(')'):
+                # Remove portion text like " (1.5x portion)"
+                base_description = food_description.split(' (')[0]
+            else:
+                base_description = food_description
+
+            # Get new nutrition with custom multiplier
+            nutrition_data = await self.nutritionix_service.get_nutrition_data(
+                base_description,
+                multiplier
+            )
+
+            meal_data['nutrition'] = nutrition_data
+            meal_data['portion_multiplier'] = multiplier
+
+            # Update food description to show custom portion
+            original_description = base_description
+            if multiplier == 1.0:
+                portion_text = " (Normal portion)"
+            elif multiplier < 0.5:
+                portion_text = f" ({multiplier}x small portion)"
+            elif multiplier > 2.0:
+                portion_text = f" ({multiplier}x large portion)"
+            else:
+                portion_text = f" ({multiplier}x portion)"
+
+            meal_data['food_description'] = original_description + portion_text
+
+            # Show updated confirmation
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{meal_id}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{meal_id}")
+                ],
+                [
+                    InlineKeyboardButton("🔧 Adjust Portions", callback_data=f"adjust_{meal_id}"),
+                    InlineKeyboardButton("✏️ Edit Items", callback_data=f"edit_{meal_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            response = self._format_confirmation_response(
+                meal_data['food_description'],
+                nutrition_data,
+                meal_data.get('confidence', 'medium')
+            )
+
+            await update.message.reply_text(response, reply_markup=reply_markup)
+
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid input. Please enter a valid number (e.g., 1.5, 0.75, 2.0).\n"
+                "Try again:"
+            )
+
     async def _handle_back_to_confirmation(self, query, context: ContextTypes.DEFAULT_TYPE, data: str):
         """Handle back to confirmation."""
         meal_id = data.replace('back_', '')
@@ -813,34 +2191,45 @@ class JiakAI:
     def _format_confirmation_response(self, food_description: str, nutrition_data: dict, confidence: str = 'medium') -> str:
         """Format confirmation response with nutrition data and confidence."""
         calories = nutrition_data.get('calories', 0)
-        
+        portion_multiplier = nutrition_data.get('portion_multiplier', 1.0)
+
         # Add calorie warning if it seems too high
         warning = ""
         if calories > 1000:
             warning = "\n⚠️ This seems like a high calorie estimate. Please review and adjust if needed."
         elif calories < 50:
             warning = "\n⚠️ This seems like a low calorie estimate. Please review and adjust if needed."
-        
+
         # Add confidence indicator
         confidence_icons = {
             'high': '🎯',
-            'medium': '🔍', 
+            'medium': '🔍',
             'low': '❓',
             'very_low': '⚠️'
         }
-        
+
         confidence_text = {
             'high': '(High confidence)',
             'medium': '(Medium confidence)',
             'low': '(Low confidence - please review)',
             'very_low': '(Very low confidence - please verify)'
         }
-        
+
         confidence_icon = confidence_icons.get(confidence, '🔍')
         confidence_msg = confidence_text.get(confidence, '')
-        
+
+        # Add portion information
+        portion_text = ""
+        if portion_multiplier != 1.0:
+            if portion_multiplier > 1.0:
+                portion_text = f"\n🍽️ Estimated portion: {portion_multiplier}x (larger than standard)"
+            else:
+                portion_text = f"\n🍽️ Estimated portion: {portion_multiplier}x (smaller than standard)"
+        else:
+            portion_text = "\n🍽️ Portion: Standard serving"
+
         return (
-            f"🍽️ {food_description}\n\n"
+            f"🍽️ {food_description}{portion_text}\n\n"
             f"📊 Detected Nutrition: {confidence_icon} {confidence_msg}\n"
             f"🔥 Calories: {calories:.0f}\n"
             f"🥩 Protein: {nutrition_data.get('protein', 0):.1f}g\n"
@@ -995,7 +2384,57 @@ class JiakAI:
         except Exception as e:
             logger.error(f"Error deleting meal: {e}")
             await query.edit_message_text("❌ Error deleting meal.")
-    
+
+    async def _handle_request_reinstate(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Handle reinstatement request from revoked users."""
+        if not query or not query.from_user:
+            return
+
+        user = query.from_user
+        user_id = str(user.id)
+
+        try:
+            # Check if user was actually revoked
+            existing_request = await self.firebase_service.get_access_request(user_id)
+
+            if not existing_request or existing_request.get('status') != 'revoked':
+                await query.edit_message_text(
+                    "❌ **Error**\n\n"
+                    "No revoked access record found for your account.\n"
+                    "Please use the regular request access option."
+                )
+                return
+
+            # Update status to reinstatement request
+            access_request_ref = self.firebase_service.db.collection('access_requests').document(user_id)
+            access_request_ref.update({
+                'status': 'reinstate_request',
+                'reinstate_requested_at': datetime.now(),
+            })
+
+            message = (
+                "✅ **Reinstatement Request Submitted**\n\n"
+                "Your request to restore access has been submitted for review.\n\n"
+                "**What happens next:**\n"
+                "• Your request will be reviewed by administrators\n"
+                "• You'll be notified if your access is restored\n"
+                "• Your previous data will be preserved\n\n"
+                "**Note:** This is a reinstatement request for previously revoked access."
+            )
+
+            await query.edit_message_text(message, parse_mode='Markdown')
+
+            # Log the reinstatement request
+            logger.info(f"Reinstatement request submitted for user {user_id} ({user.first_name})")
+
+        except Exception as e:
+            logger.error(f"Error handling reinstatement request for user {user_id}: {e}")
+            await query.edit_message_text(
+                "❌ **Error**\n\n"
+                "An error occurred while processing your reinstatement request. "
+                "Please try again later."
+            )
+
     async def _handle_cancel_delete(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Handle cancel delete operation."""
         await query.edit_message_text("❌ Delete operation cancelled.")
@@ -1110,21 +2549,67 @@ class JiakAI:
         await query.edit_message_text(response, reply_markup=reply_markup)
 
 async def setup_bot_menu(application):
-    """Set up the bot menu commands."""
-    commands = [
+    """Set up the bot menu commands with different menus for admin and regular users."""
+
+    # Regular user commands
+    regular_commands = [
         BotCommand("start", "🚀 Start the bot"),
         BotCommand("summary", "📊 Today's nutrition summary"),
         BotCommand("history", "📝 View meal history"),
         BotCommand("help", "❓ Get help and instructions"),
         BotCommand("request_access", "🔑 Request access to use the bot"),
     ]
-    
-    await application.bot.set_my_commands(commands)
+
+    # Admin commands (includes all regular commands plus admin-only)
+    admin_commands = regular_commands + [
+        BotCommand("admin_panel", "👑 Admin Control Panel"),
+        BotCommand("list_requests", "📋 View access requests"),
+        BotCommand("manage_users", "👥 Manage user access"),
+        BotCommand("reload_access", "🔄 Reload access cache"),
+    ]
+
+    # Set commands for everyone (regular users will see regular menu)
+    await application.bot.set_my_commands(regular_commands)
     logger.info("Bot menu commands set up successfully")
+
+async def setup_admin_menu_for_user(application, user_id: str):
+    """Set up admin menu for a specific admin user."""
+    try:
+        admin_commands = [
+            BotCommand("start", "🚀 Start the bot"),
+            BotCommand("summary", "📊 Today's nutrition summary"),
+            BotCommand("history", "📝 View meal history"),
+            BotCommand("help", "❓ Get help and instructions"),
+            BotCommand("admin_panel", "👑 Admin Control Panel"),
+            BotCommand("list_requests", "📋 View access requests"),
+            BotCommand("manage_users", "👥 Manage user access"),
+            BotCommand("reload_access", "🔄 Reload access cache"),
+        ]
+
+        # Set admin commands for specific user
+        await application.bot.set_my_commands(admin_commands, scope={'type': 'chat', 'chat_id': user_id})
+        logger.info(f"Admin menu set for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error setting admin menu for user {user_id}: {e}")
+
+def is_admin(user_id: str) -> bool:
+    """Check if user is admin based on environment variable."""
+    authorized_users_str = os.getenv('AUTHORIZED_TELEGRAM_IDS', '')
+    if authorized_users_str:
+        admin_ids = [uid.strip() for uid in authorized_users_str.split(',') if uid.strip()]
+        return user_id in admin_ids
+    return False
 
 async def post_init(application):
     """Called after the application is initialized."""
     await setup_bot_menu(application)
+
+    # Set up admin menu for admin users
+    authorized_users_str = os.getenv('AUTHORIZED_TELEGRAM_IDS', '')
+    if authorized_users_str:
+        admin_ids = [uid.strip() for uid in authorized_users_str.split(',') if uid.strip()]
+        for admin_id in admin_ids:
+            await setup_admin_menu_for_user(application, admin_id)
 
 def main():
     """Start the bot."""
@@ -1142,6 +2627,13 @@ def main():
     application.add_handler(CommandHandler("summary", jiak_ai.summary_command))
     application.add_handler(CommandHandler("history", jiak_ai.history_command))
     application.add_handler(CommandHandler("request_access", jiak_ai.request_access_command))
+
+    # Admin commands (new streamlined approach)
+    application.add_handler(CommandHandler("admin_panel", jiak_ai.admin_panel_command))
+    application.add_handler(CommandHandler("list_requests", jiak_ai.list_requests_command))
+    application.add_handler(CommandHandler("manage_users", jiak_ai.manage_users_command))
+    application.add_handler(CommandHandler("reload_access", jiak_ai.reload_access_command))
+
     application.add_handler(CallbackQueryHandler(jiak_ai.handle_callback))
     application.add_handler(MessageHandler(filters.PHOTO, jiak_ai.handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, jiak_ai.handle_text))

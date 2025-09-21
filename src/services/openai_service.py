@@ -34,9 +34,9 @@ class OpenAIService:
                     {
                         "role": "system",
                         "content": (
-                            "You are a nutrition expert analyzing food photos. Focus ONLY on actual food items that people eat. "
+                            "You are a nutrition expert analyzing food photos with portion estimation expertise. Focus ONLY on actual food items that people eat. "
                             "IGNORE plates, bowls, utensils, tables, bamboo mats, decorative items, drinks, and background objects. "
-                            "Provide realistic portion estimates based on typical serving sizes. "
+                            "Provide realistic portion estimates as multipliers of standard servings (0.5x, 1x, 1.5x, 2x, etc.). "
                             "If you see multiple portions of the same food, specify the total amount. "
                             "Be conservative with portion estimates - it's better to underestimate than overestimate. "
                             "If NO FOOD is visible or you cannot identify any food items clearly, respond with 'NO_FOOD_DETECTED'."
@@ -48,13 +48,14 @@ class OpenAIService:
                             {
                                 "type": "text",
                                 "text": (
-                                    "Analyze this food photo and list ONLY the edible food items with realistic portion sizes. "
+                                    "Analyze this food photo and list ONLY the edible food items with portion multipliers. "
+                                    "For each food item, estimate the portion size as a multiplier of a standard serving (0.5x, 1x, 1.5x, 2x, etc.). "
                                     "Focus on main dishes, side dishes, and accompaniments that contribute significant calories. "
                                     "Ignore garnishes, condiment packets, or tiny portions. "
                                     "If you cannot clearly identify any food items, respond with 'NO_FOOD_DETECTED'. "
                                     "If the image is too blurry, dark, or unclear, respond with 'IMAGE_UNCLEAR'. "
-                                    "Format as: 'X portions/cups/grams of [specific food name]' "
-                                    "Example: '1 cup steamed white rice, 120g roasted chicken thigh, 2 tablespoons stir-fried vegetables'"
+                                    "Format as: '[portion multiplier]x [specific food name]' "
+                                    "Example: '1.5x steamed white rice, 1x roasted chicken thigh, 0.5x stir-fried vegetables'"
                                 )
                             },
                             {
@@ -101,11 +102,15 @@ class OpenAIService:
                     'confidence': confidence,
                     'error': 'Food detection confidence too low'
                 }
-            
+
+            # Parse portion information
+            portion_data = self._parse_portion_information(food_description)
+
             return {
                 'success': True,
                 'description': food_description,
                 'confidence': confidence,
+                'portion_data': portion_data,
                 'error': None
             }
             
@@ -207,11 +212,19 @@ class OpenAIService:
                     'confidence': confidence,
                     'error': 'Food description confidence too low'
                 }
-            
+
+            # For text input, default to 1.0 portion multiplier
+            portion_data = {
+                'overall_multiplier': 1.0,
+                'food_items': [],
+                'has_portion_info': False
+            }
+
             return {
                 'success': True,
                 'description': food_description,
                 'confidence': confidence,
+                'portion_data': portion_data,
                 'error': None
             }
             
@@ -333,3 +346,81 @@ class OpenAIService:
             return 'low'
         else:
             return 'very_low'
+
+    def _parse_portion_information(self, description: str) -> Dict:
+        """
+        Parse portion multiplier information from AI description.
+
+        Args:
+            description: AI-generated food description
+
+        Returns:
+            Dictionary with portion information
+        """
+        try:
+            import re
+
+            # Look for portion multipliers like "1.5x", "2x", "0.5x"
+            portion_pattern = r'(\d+\.?\d*)x\s+([^,]+)'
+            matches = re.findall(portion_pattern, description, re.IGNORECASE)
+
+            food_items = []
+            total_multiplier = 0.0
+            item_count = 0
+
+            for match in matches:
+                multiplier = float(match[0])
+                food_name = match[1].strip()
+                food_items.append({
+                    'name': food_name,
+                    'portion_multiplier': multiplier
+                })
+                total_multiplier += multiplier
+                item_count += 1
+
+            # Calculate overall multiplier
+            if item_count > 0:
+                overall_multiplier = total_multiplier / item_count
+                has_portion_info = True
+            else:
+                # Fallback: look for general portion indicators
+                overall_multiplier = self._estimate_overall_portion(description)
+                has_portion_info = False
+
+            return {
+                'overall_multiplier': round(overall_multiplier, 2),
+                'food_items': food_items,
+                'has_portion_info': has_portion_info
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing portion information: {e}")
+            return {
+                'overall_multiplier': 1.0,
+                'food_items': [],
+                'has_portion_info': False
+            }
+
+    def _estimate_overall_portion(self, description: str) -> float:
+        """
+        Estimate overall portion multiplier from description if no explicit multipliers found.
+
+        Args:
+            description: Food description text
+
+        Returns:
+            Estimated portion multiplier
+        """
+        description_lower = description.lower()
+
+        # Look for portion indicators
+        if any(word in description_lower for word in ['large', 'big', 'huge', 'jumbo']):
+            return 1.5
+        elif any(word in description_lower for word in ['double', 'two', '2x']):
+            return 2.0
+        elif any(word in description_lower for word in ['small', 'little', 'mini']):
+            return 0.75
+        elif any(word in description_lower for word in ['half', '1/2', '0.5']):
+            return 0.5
+        else:
+            return 1.0

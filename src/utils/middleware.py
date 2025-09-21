@@ -56,7 +56,7 @@ def require_access_callback(func):
 async def send_access_denied_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
     """
     Send access denied message with option to request access.
-    
+
     Args:
         update: Telegram update object
         context: Bot context
@@ -67,16 +67,53 @@ async def send_access_denied_message(update: Update, context: ContextTypes.DEFAU
         username = user.username
         first_name = user.first_name
         last_name = user.last_name
-        
-        # Create keyboard with request access button
-        keyboard = [
-            [InlineKeyboardButton("🔑 Request Access", callback_data="request_access")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        access_denied_message = (
-            "🚫 **Access Restricted**\n\n"
-            "This is an internal tool with limited access to manage costs and usage.\n\n"
+
+        # Check if user has been revoked
+        # Import access_control to get existing Firebase service instance
+        from src.utils import access_control as access_control_module
+
+        firebase_service = access_control_module.access_control.firebase_service if access_control_module.access_control else None
+        existing_request = None
+
+        if firebase_service:
+            existing_request = await firebase_service.get_access_request(user_id)
+
+        if existing_request and existing_request.get('status') == 'revoked':
+            # User was revoked - show different message
+            keyboard = [
+                [InlineKeyboardButton("🔄 Request Reinstatement", callback_data="request_reinstate")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            access_denied_message = (
+                "🚫 **Access Revoked**\n\n"
+                "Your access to this tool has been revoked.\n\n"
+                "If you believe this was done in error or would like to request reinstatement, "
+                "please click the button below to submit a reinstatement request.\n\n"
+                "📝 Your previous data will be preserved if access is restored."
+            )
+        elif existing_request and existing_request.get('status') == 'reinstate_request':
+            # User already requested reinstatement - show status message
+            keyboard = []  # No button needed
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+
+            access_denied_message = (
+                "⏳ **Reinstatement Request Pending**\n\n"
+                "Your request to restore access has already been submitted and is under review.\n\n"
+                "**Current Status:** Awaiting administrator review\n\n"
+                "📝 You will be notified once your request is processed.\n"
+                "Your previous data will be preserved if access is restored."
+            )
+        else:
+            # Regular access denied - first time user or pending
+            keyboard = [
+                [InlineKeyboardButton("🔑 Request Access", callback_data="request_access")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            access_denied_message = (
+                "🚫 **Access Restricted**\n\n"
+                "This is an internal tool with limited access to manage costs and usage.\n\n"
             "**Why is access restricted?**\n"
             "• We limit access to authorized users to control expenses\n\n"
             "**How to get access:**\n"

@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Set, Optional, Dict
 from pathlib import Path
 
@@ -8,51 +8,101 @@ logger = logging.getLogger(__name__)
 
 class AccessControl:
     """Manages user access permissions for the JiakAI bot."""
-    
+
     def __init__(self, firebase_service=None):
         self.authorized_users: Set[str] = set()
         self.firebase_service = firebase_service
+        self.cache_ttl = 300  # 5 minutes in seconds
+        self.last_cache_update = None
         self._load_authorized_users()
     
     def _load_authorized_users(self):
-        """Load authorized users from environment variable."""
+        """Load authorized users from environment variable (sync initialization)."""
         try:
-            # Get authorized users from .env file
-            authorized_users_str = os.getenv('AUTHORIZED_TELEGRAM_IDS', '')
-            print('authorized_users_str - ',authorized_users_str)
-            
-            if authorized_users_str:
-                # Split by comma and clean up whitespace
-                user_ids = [uid.strip() for uid in authorized_users_str.split(',') if uid.strip()]
-                self.authorized_users = set(user_ids)
-                logger.info(f"Loaded {len(self.authorized_users)} authorized users: {list(self.authorized_users)}")
-            else:
-                # Clear authorized users if env var is empty
-                self.authorized_users = set()
-                logger.warning("No authorized users found in AUTHORIZED_TELEGRAM_IDS environment variable - access denied to all users")
-                
+            # For initialization, always use environment variable
+            # Firebase loading will be done asynchronously when needed
+            self._load_from_env()
+
         except Exception as e:
             logger.error(f"Error loading authorized users: {e}")
             # On error, clear authorized users for security
             self.authorized_users = set()
+
+    async def _load_from_firebase(self):
+        """Load authorized users from Firebase."""
+        try:
+            authorized_users = await self.firebase_service.get_authorized_users()
+            if authorized_users:
+                self.authorized_users = set(authorized_users)
+                self.last_cache_update = datetime.now()
+                logger.info(f"Loaded {len(self.authorized_users)} authorized users from Firebase")
+            else:
+                logger.warning("No authorized users found in Firebase - falling back to environment variable")
+                self._load_from_env()
+
+        except Exception as e:
+            logger.error(f"Error loading authorized users from Firebase: {e}")
+            self._load_from_env()
+
+    def _load_from_env(self):
+        """Load authorized users from environment variable (fallback method)."""
+        try:
+            # Get authorized users from .env file
+            authorized_users_str = os.getenv('AUTHORIZED_TELEGRAM_IDS', '')
+            print('authorized_users_str - ', authorized_users_str)
+
+            if authorized_users_str:
+                # Split by comma and clean up whitespace
+                user_ids = [uid.strip() for uid in authorized_users_str.split(',') if uid.strip()]
+                self.authorized_users = set(user_ids)
+                logger.info(f"Loaded {len(self.authorized_users)} authorized users from environment: {list(self.authorized_users)}")
+            else:
+                # Clear authorized users if env var is empty
+                self.authorized_users = set()
+                logger.warning("No authorized users found in AUTHORIZED_TELEGRAM_IDS environment variable - access denied to all users")
+
+        except Exception as e:
+            logger.error(f"Error loading authorized users from environment: {e}")
+            # On error, clear authorized users for security
+            self.authorized_users = set()
     
-    def reload_authorized_users(self):
-        """Manually reload authorized users from environment."""
-        self._load_authorized_users()
+    async def reload_authorized_users(self):
+        """Manually reload authorized users."""
+        if self.firebase_service:
+            await self._load_from_firebase()
+        else:
+            self._load_from_env()
         return len(self.authorized_users)
-    
-    def is_authorized(self, user_id: str) -> bool:
+
+    async def is_authorized(self, user_id: str) -> bool:
         """
-        Check if a user is authorized to use the bot.
-        
+        Check if a user is authorized to use the bot with cache management.
+
         Args:
             user_id: Telegram user ID as string
-            
+
         Returns:
             True if user is authorized, False otherwise
         """
-        # Reload authorized users each time to get fresh env vars
-        self._load_authorized_users()
+        # Check if cache needs refresh (only for Firebase)
+        if (self.firebase_service and self.last_cache_update and
+            (datetime.now() - self.last_cache_update).seconds > self.cache_ttl):
+            logger.info("Cache expired, refreshing authorized users from Firebase")
+            await self._load_from_firebase()
+        elif not self.firebase_service:
+            # For environment variable method, always reload to get fresh values
+            self._load_from_env()
+
+        return user_id in self.authorized_users
+
+    # Synchronous version for backwards compatibility
+    def is_authorized_sync(self, user_id: str) -> bool:
+        """
+        Synchronous version of is_authorized for backwards compatibility.
+        Only uses environment variables (no Firebase cache refresh).
+        """
+        if not self.firebase_service:
+            self._load_from_env()
         return user_id in self.authorized_users
     
     async def request_access(self, user_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> bool:
@@ -70,7 +120,7 @@ class AccessControl:
         """
         try:
             # Check if user is already authorized
-            if self.is_authorized(user_id):
+            if await self.is_authorized(user_id):
                 logger.info(f"User {user_id} is already authorized, ignoring access request")
                 return False
             
@@ -167,16 +217,32 @@ access_control = None
 
 def check_user_access(user_id: str) -> bool:
     """
-    Convenience function to check if user has access.
-    
+    Convenience function to check if user has access (synchronous version).
+
     Args:
         user_id: Telegram user ID as string
-        
+
     Returns:
         True if user is authorized
     """
     if access_control:
-        return access_control.is_authorized(user_id)
+        return access_control.is_authorized_sync(user_id)
+    else:
+        logger.error("Access control not initialized")
+        return False
+
+async def check_user_access_async(user_id: str) -> bool:
+    """
+    Convenience function to check if user has access (async version with Firebase support).
+
+    Args:
+        user_id: Telegram user ID as string
+
+    Returns:
+        True if user is authorized
+    """
+    if access_control:
+        return await access_control.is_authorized(user_id)
     else:
         logger.error("Access control not initialized")
         return False
@@ -200,15 +266,15 @@ async def log_access_request(user_id: str, username: Optional[str] = None, first
         logger.error("Access control not initialized")
         return False
 
-def reload_authorized_users() -> int:
+async def reload_authorized_users() -> int:
     """
-    Convenience function to reload authorized users from environment.
-    
+    Convenience function to reload authorized users.
+
     Returns:
         Number of authorized users loaded
     """
     if access_control:
-        return access_control.reload_authorized_users()
+        return await access_control.reload_authorized_users()
     else:
         logger.error("Access control not initialized")
         return 0
